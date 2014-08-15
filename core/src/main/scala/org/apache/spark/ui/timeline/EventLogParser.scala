@@ -30,8 +30,8 @@ import org.apache.spark.ui.timeline.dao._
  */
 private[spark] class EventLogParser(
   val filePath: String) {
-  var taskInfos = new ListBuffer[TaskInfo]
-  var executorIds = new ListBuffer[String]
+  val taskInfos = new ListBuffer[TaskInfo]
+  val executorIds = new ListBuffer[String]
   val reg = """.*"Event":"SparkListenerTaskEnd".*""".r
 
   def parse() : AppInfo = {
@@ -53,19 +53,21 @@ private[spark] class EventLogParser(
     val json = JsonMethods.parse(line).values
 
     val values = json.asInstanceOf[Map[String,Map[String,BigInt]]]
-    val taskId = values("Task Info")("Task ID")
-    val launchTime = new Date(values("Task Info")("Launch Time").toLong)
-    val finishTime = new Date(values("Task Info")("Finish Time").toLong)
-    val serilizationTime = values("Task Metrics")("Result Serialization Time")
+    val taskInfoElement = values("Task Info")
+    val taskId = taskInfoElement("Task ID")
+    val launchTime = new Date(taskInfoElement("Launch Time").toLong)
+    val finishTime = new Date(taskInfoElement("Finish Time").toLong)
+    val taskMetricsElement = values("Task Metrics")
+    val serializationTime = taskMetricsElement("Result Serialization Time")
     val deserializationTime =
-      values("Task Metrics")("Executor Deserialize Time")
+      taskMetricsElement("Executor Deserialize Time")
 
     val valuesStr = json.asInstanceOf[Map[String,Map[String,String]]]
     val executorId = valuesStr("Task Info")("Executor ID")
     executorIds += executorId
 
-    var taskInfo = new TaskInfo(taskId,executorId,launchTime,finishTime,
-      deserializationTime,serilizationTime)
+    val taskInfo = new TaskInfo(taskId,executorId,launchTime,finishTime,
+      deserializationTime,serializationTime)
     taskInfos += taskInfo
   }
 }

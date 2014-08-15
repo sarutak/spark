@@ -22,10 +22,10 @@ import scala.collection.mutable.ListBuffer
 /**
  * Application information dao
  */
-private[spark] class AppInfo(
-    var taskNum: Int,
-    var executorIds: ListBuffer[String],
-    var taskInfoSet: ListBuffer[TaskInfo]) {
+private[spark] case class AppInfo(
+    val taskNum: Int,
+    val executorIds: ListBuffer[String],
+    val taskInfoSet: ListBuffer[TaskInfo]) {
 
   def getTaskInfoSortByTaskId() : ListBuffer[TaskInfo] = {
     taskInfoSet.sortBy(_.taskId)

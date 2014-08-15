@@ -22,11 +22,11 @@ import java.util.Date
 /**
  * Task information dao
  */
-private[spark] class TaskInfo(
-    var taskId: BigInt,
-    var executorId: String,
-    var launchTime: Date,
-    var finishTime: Date,
-    var deserializationTime: BigInt,
-    var serializationTime: BigInt) {
+private[spark] case class TaskInfo(
+    val taskId: BigInt,
+    val executorId: String,
+    val launchTime: Date,
+    val finishTime: Date,
+    val deserializationTime: BigInt,
+    val serializationTime: BigInt) {
 }
