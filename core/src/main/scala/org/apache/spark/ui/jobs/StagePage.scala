@@ -25,7 +25,7 @@ import scala.xml.{Node, Unparsed}
 import org.apache.commons.lang3.StringEscapeUtils
 
 import org.apache.spark.executor.TaskMetrics
-import org.apache.spark.ui.{ToolTips, WebUIPage, UIUtils}
+import org.apache.spark.ui.{DebugToolsJsGenerator, ToolTips, WebUIPage, UIUtils}
 import org.apache.spark.ui.jobs.UIData._
 import org.apache.spark.util.{Utils, Distribution}
 import org.apache.spark.scheduler.{AccumulableInfo, TaskInfo}
@@ -338,7 +338,8 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
         <div>{summaryTable.getOrElse("No tasks have reported metrics yet.")}</div> ++
         <h4>Aggregated Metrics by Executor</h4> ++ executorTable.toNodeSeq ++
         maybeAccumulableTable ++
-        <h4>Tasks</h4> ++ taskTable
+        <h4>Tasks</h4> ++ taskTable ++
+        <script type="text/javascript">{DebugToolsJsGenerator.generateTest}</script>
 
       UIUtils.headerSparkPage("Details for Stage %d".format(stageId), content, parent)
     }

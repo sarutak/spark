@@ -149,7 +149,6 @@ private[ui] class JobPage(parent: JobsTab) extends WebUIPage("job") {
             }
           </ul>
         </div>
-
       var content = summary
       if (shouldShowActiveStages) {
         content ++= <h4 id="active">Active Stages ({activeStages.size})</h4> ++
