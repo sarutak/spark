@@ -152,8 +152,8 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
           </ul>
         </div>
 
-      val _3list = scala.collection.mutable.HashMap[(Int, Int), scala.collection.mutable.ListBuffer[UIData.TaskUIData]]()
-      def _3sigma = {
+      val _6list = scala.collection.mutable.HashMap[(Int, Int), scala.collection.mutable.ListBuffer[UIData.TaskUIData]]()
+      def _6sigma {
         completedJobs.foreach {
           case uiData =>
             uiData.stageIds.foreach {
@@ -165,14 +165,14 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
                 val std: Double = math.sqrt(tasks.map(x => math.pow(x.taskInfo.duration - avg, 2)).reduce(_ + _) / tasks.length)
                 tasks.foreach {
                   task =>
-                    if (avg - 3 * std > task.taskInfo.duration || avg + 3 * std < task.taskInfo.duration) {
-                      _3list.getOrElseUpdate((stageInfo.stageId, stageInfo.attemptId), new scala.collection.mutable.ListBuffer[UIData.TaskUIData]()).append(task)
+                    if (avg - 6 * std > task.taskInfo.duration || avg + 6 * std < task.taskInfo.duration) {
+                      _6list.getOrElseUpdate((stageInfo.stageId, stageInfo.attemptId), new scala.collection.mutable.ListBuffer[UIData.TaskUIData]()).append(task)
                     }
                 }
             }
         }
       }
-
+      _6sigma
       var content = summary
       if (shouldShowActiveJobs) {
         content ++= <h4 id="active">Active Jobs ({activeJobs.size})</h4> ++
@@ -181,13 +181,13 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
       if (shouldShowCompletedJobs) {
         content ++= <h4 id="completed">Completed Jobs ({completedJobs.size})</h4> ++
           completedJobsTable
-        if (_3list.nonEmpty) {
+        if (_6list.nonEmpty) {
           content ++= <table>
             <tr>
-              <th>Stage ID</th> <th>Attempt ID</th> <th>Task ID</th> <th>Task Attempt ID</th>
-            </tr>{_3list.keysIterator.map {
+              <th>Stage ID</th> <th>Attempt ID</th> <th>Task ID</th> <th>Task Attempt ID</th><th>Executor ID</th><th>Host</th>
+            </tr>{_6list.keysIterator.flatMap {
               case (stageId, stageAttemptId) =>
-                _3list((stageId, stageAttemptId)).foreach {
+                _6list((stageId, stageAttemptId)).map {
                   value =>
                     <tr>
                       <td>
@@ -196,7 +196,11 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
                       {stageAttemptId}
                     </td> <td>
                       {value.taskInfo.taskId}
-                    </td>{value.taskInfo.attempt}
+                    </td><td>
+                      {value.taskInfo.attempt}</td>
+                      <td>{value.taskInfo.duration}</td>
+                      <td>{value.taskInfo.executorId}</td>
+                      <td>{value.taskInfo.host}</td>
                     </tr>
                 }
             }}
