@@ -152,6 +152,27 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
           </ul>
         </div>
 
+      val _3list = scala.collection.mutable.HashMap[(Int, Int), scala.collection.mutable.ListBuffer[UIData.TaskUIData]]()
+      def _3sigma = {
+        completedJobs.foreach {
+          case uiData =>
+            uiData.stageIds.foreach {
+              case stageId =>
+                val stageInfo = listener.stageIdToInfo(stageId)
+                val stageData = listener.stageIdToData.get(stageInfo.stageId, stageInfo.attemptId).get
+                val tasks = stageData.taskData.values.toSeq.sortBy(_.taskInfo.launchTime)
+                val avg: Double = tasks.foldLeft[Double](0)(_ + _.taskInfo.duration) / tasks.length
+                val std: Double = math.sqrt(tasks.map(x => math.pow(x.taskInfo.duration - avg, 2)).reduce(_ + _) / tasks.length)
+                tasks.foreach {
+                  task =>
+                    if (avg - 3 * std > task.taskInfo.duration || avg + 3 * std < task.taskInfo.duration) {
+                      _3list.getOrElseUpdate((stageInfo.stageId, stageInfo.attemptId), new scala.collection.mutable.ListBuffer[UIData.TaskUIData]()).append(task)
+                    }
+                }
+            }
+        }
+      }
+
       var content = summary
       if (shouldShowActiveJobs) {
         content ++= <h4 id="active">Active Jobs ({activeJobs.size})</h4> ++
@@ -160,6 +181,27 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
       if (shouldShowCompletedJobs) {
         content ++= <h4 id="completed">Completed Jobs ({completedJobs.size})</h4> ++
           completedJobsTable
+        if (_3list.nonEmpty) {
+          content ++= <table>
+            <tr>
+              <th>Stage ID</th> <th>Attempt ID</th> <th>Task ID</th> <th>Task Attempt ID</th>
+            </tr>{_3list.keysIterator.map {
+              case (stageId, stageAttemptId) =>
+                _3list((stageId, stageAttemptId)).foreach {
+                  value =>
+                    <tr>
+                      <td>
+                        {stageId}
+                      </td> <td>
+                      {stageAttemptId}
+                    </td> <td>
+                      {value.taskInfo.taskId}
+                    </td>{value.taskInfo.attempt}
+                    </tr>
+                }
+            }}
+          </table>
+        }
       }
       if (shouldShowFailedJobs) {
         content ++= <h4 id ="failed">Failed Jobs ({failedJobs.size})</h4> ++
