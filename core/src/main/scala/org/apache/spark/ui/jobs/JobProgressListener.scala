@@ -459,7 +459,6 @@ class JobProgressListener(conf: SparkConf) extends SparkListener with Logging {
       val blockManagerId = blockManagerAdded.blockManagerId
       val executorId = blockManagerId.executorId
       executorIdToBlockManagerId(executorId) = blockManagerId
-      executorIdToAddedTime(executorId) = blockManagerAdded.time
     }
   }
 
@@ -467,7 +466,20 @@ class JobProgressListener(conf: SparkConf) extends SparkListener with Logging {
     synchronized {
       val executorId = blockManagerRemoved.blockManagerId.executorId
       executorIdToBlockManagerId.remove(executorId)
-      executorIdToRemovedTime(executorId) = blockManagerRemoved.time
+    }
+  }
+
+  override def onExecutorAdded(executorAdded: SparkListenerExecutorAdded) {
+    synchronized {
+      val executorId = executorAdded.executorId
+      executorIdToAddedTime(executorId) = executorAdded.time
+    }
+  }
+
+  override def onExecutorRemoved(executorRemoved: SparkListenerExecutorRemoved) {
+    synchronized {
+      val executorId = executorRemoved.executorId
+      executorIdToRemovedTime(executorId) = executorRemoved.time
     }
   }
 
