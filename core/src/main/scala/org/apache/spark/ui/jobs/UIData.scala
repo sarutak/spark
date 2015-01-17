@@ -94,4 +94,5 @@ private[jobs] object UIData {
       var taskInfo: TaskInfo,
       var taskMetrics: Option[TaskMetrics] = None,
       var errorMessage: Option[String] = None)
+
 }

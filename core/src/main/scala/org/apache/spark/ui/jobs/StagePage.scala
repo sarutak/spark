@@ -338,8 +338,7 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
         <div>{summaryTable.getOrElse("No tasks have reported metrics yet.")}</div> ++
         <h4>Aggregated Metrics by Executor</h4> ++ executorTable.toNodeSeq ++
         maybeAccumulableTable ++
-        <h4>Tasks</h4> ++ taskTable ++
-        <script type="text/javascript">{DebugToolsJsGenerator.generateTest}</script>
+        <h4>Tasks</h4> ++ taskTable
 
       UIUtils.headerSparkPage("Details for Stage %d".format(stageId), content, parent)
     }

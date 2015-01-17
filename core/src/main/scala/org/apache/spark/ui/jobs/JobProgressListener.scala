@@ -73,6 +73,8 @@ class JobProgressListener(conf: SparkConf) extends SparkListener with Logging {
   // Misc:
   val executorIdToBlockManagerId = HashMap[ExecutorId, BlockManagerId]()
   def blockManagerIds = executorIdToBlockManagerId.values.toSeq
+  val executorIdToAddedTime = new HashMap[ExecutorId, Long]
+  val executorIdToRemovedTime = new HashMap[ExecutorId, Long]
 
   var schedulingMode: Option[SchedulingMode] = None
 
@@ -457,6 +459,7 @@ class JobProgressListener(conf: SparkConf) extends SparkListener with Logging {
       val blockManagerId = blockManagerAdded.blockManagerId
       val executorId = blockManagerId.executorId
       executorIdToBlockManagerId(executorId) = blockManagerId
+      executorIdToAddedTime(executorId) = blockManagerAdded.time
     }
   }
 
@@ -464,6 +467,7 @@ class JobProgressListener(conf: SparkConf) extends SparkListener with Logging {
     synchronized {
       val executorId = blockManagerRemoved.blockManagerId.executorId
       executorIdToBlockManagerId.remove(executorId)
+      executorIdToRemovedTime(executorId) = blockManagerRemoved.time
     }
   }
 

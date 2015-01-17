@@ -173,6 +173,50 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
       }
       _6sigma
       var content = summary
+
+      val jobEventList = listener.completedJobs.map(x => (x.jobId, x.submissionTime.getOrElse(-1), x.completionTime.getOrElse(-1))) ++
+        listener.failedJobs.map(x => (x.jobId, x.submissionTime.getOrElse(-1), x.completionTime.getOrElse(-1)))
+      val executorAddedEventList = listener.executorIdToAddedTime.map(kv => (kv._1, kv._2))
+      val executorRemovedEventList = listener.executorIdToRemovedTime.map(kv => (kv._1, kv._2))
+      val jobEventArray = jobEventList.map {
+        case (jobId, submissionTime, completionTime) =>
+          s"""
+            |{
+            |  'start': new Date(${submissionTime}),
+            |  'end': new Date(${completionTime}),
+            |  'content': 'Job ID=${jobId}'
+            |}
+          """.stripMargin
+      }
+
+      val executorAddedEventArray = executorAddedEventList.map {
+        case (executorId, addedTime) =>
+          s"""
+            |{
+            |  'start': new Date(${addedTime}),
+            |  'content': 'Executor ID=${executorId} added'
+            |}
+          """.stripMargin
+      }
+      val executorRemovedEventArray = executorRemovedEventList.map {
+        case (executorId, removedTime) =>
+          s"""
+            |{
+            |  'start': new Date(${removedTime}),
+            |  'content': 'Executor ID=${executorId} removed'
+            |}
+          """.stripMargin
+      }
+
+      val eventArrayStr =
+        (jobEventArray ++ executorAddedEventArray ++ executorRemovedEventArray).mkString("[", ",", "]")
+
+      content ++= <h4>Application Timeline</h4> ++ <div id="application-timeline"></div>
+      content ++=
+        <script type="text/javascript">
+          drawApplicationTimeline({eventArrayStr})
+        </script>
+
       if (shouldShowActiveJobs) {
         content ++= <h4 id="active">Active Jobs ({activeJobs.size})</h4> ++
           activeJobsTable
@@ -210,6 +254,7 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
         content ++= <h4 id ="failed">Failed Jobs ({failedJobs.size})</h4> ++
           failedJobsTable
       }
+
       val helpText = """A job is triggered by an action, like "count()" or "saveAsTextFile()".""" +
         " Click on a job's title to see information about the stages of tasks associated with" +
         " the job."
