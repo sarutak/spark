@@ -368,7 +368,7 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
                  |}
                """.stripMargin
           }
-      }.take(500).mkString("[", ",", "]")
+      }.mkString("[", ",", "]")
 
 
       val content =
