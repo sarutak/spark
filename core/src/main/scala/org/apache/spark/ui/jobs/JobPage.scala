@@ -18,7 +18,7 @@
 package org.apache.spark.ui.jobs
 
 import scala.collection.mutable
-import scala.xml.{NodeSeq, Node}
+import scala.xml.{NodeSeq, Node, Unparsed}
 
 import javax.servlet.http.HttpServletRequest
 
@@ -150,6 +150,57 @@ private[ui] class JobPage(parent: JobsTab) extends WebUIPage("job") {
           </ul>
         </div>
       var content = summary
+
+      val activeStageList = activeStages.map { info =>
+        (info.stageId, info.submissionTime.getOrElse(-1L))
+      }.map {
+        case (stageId, submissionTime) =>
+          s"""
+               |{
+               |  'start': new Date(${submissionTime}),
+               |  'content': 'Stage ${stageId}'
+               |}
+             """.stripMargin
+      }
+
+      val completionStageList = completedStages.map { info =>
+        (info.stageId, info.submissionTime.getOrElse(-1L), info.completionTime.getOrElse(-1L))
+      }.map {
+        case (stageId, submissionTime, completionTime) =>
+          s"""
+               |{
+               |  'start': new Date(${submissionTime}),
+               |  'end': new Date(${completionTime}),
+               |  'content': 'Stage ${stageId}'
+               |}
+             """.stripMargin
+      }
+
+      val failedStageList = failedStages.map { info =>
+        (info.stageId, info.submissionTime.getOrElse(-1L),
+          info.completionTime.getOrElse(-1L), info.failureReason.getOrElse("Unknown"))
+      }.map {
+        case (stageId, submissionTime, completionTime, failureReason) =>
+          s"""
+               |{
+               |  'start': new Date(${submissionTime}),
+               |  'end': new Date(${completionTime}),
+               |  'content': '<a data-toggle="tooltip" data-placement="auto" title="${failureReason}">Stage ${stageId}</a>'
+               |}
+             """.stripMargin
+      }
+
+      val eventArrayStr =
+        (activeStageList ++
+          completionStageList ++
+          failedStageList).mkString("[", ",", "]")
+
+      content ++= <h4>Events on Job {jobId}</h4> ++ <div id="job-timeline"></div>
+      content ++=
+        <script type="text/javascript">
+          {Unparsed(s"drawJobTimeline(${eventArrayStr})")}
+        </script>
+
       if (shouldShowActiveStages) {
         content ++= <h4 id="active">Active Stages ({activeStages.size})</h4> ++
           activeStagesTable.toNodeSeq

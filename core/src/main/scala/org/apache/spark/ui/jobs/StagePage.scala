@@ -20,12 +20,13 @@ package org.apache.spark.ui.jobs
 import java.util.Date
 import javax.servlet.http.HttpServletRequest
 
+import scala.collection.mutable.{HashMap, ListBuffer}
 import scala.xml.{Node, Unparsed}
 
 import org.apache.commons.lang3.StringEscapeUtils
 
 import org.apache.spark.executor.TaskMetrics
-import org.apache.spark.ui.{DebugToolsJsGenerator, ToolTips, WebUIPage, UIUtils}
+import org.apache.spark.ui.{ToolTips, WebUIPage, UIUtils}
 import org.apache.spark.ui.jobs.UIData._
 import org.apache.spark.util.{Utils, Distribution}
 import org.apache.spark.scheduler.{AccumulableInfo, TaskInfo}
@@ -331,6 +332,45 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
       val maybeAccumulableTable: Seq[Node] =
         if (accumulables.size > 0) { <h4>Accumulators</h4> ++ accumulableTable } else Seq()
 
+      val executorsMap = new HashMap[(String, String), ListBuffer[(Long, Long, Long)]]
+      stageData.taskData.foreach { kv =>
+        val taskId = kv._1
+        val data = kv._2
+        val executorId = data.taskInfo.executorId
+        val host = data.taskInfo.host
+        val launchTime = data.taskInfo.launchTime
+        val finishTime = data.taskInfo.finishTime
+        executorsMap.getOrElseUpdate((executorId, host), new ListBuffer[(Long, Long, Long)])
+          .append((taskId, launchTime, finishTime))
+      }
+
+      val groupArrayStr = executorsMap.map {
+        case ((executorId, host), _) =>
+          s"""
+             |{
+             |  'id': '${executorId}',
+             |  'content': '${executorId} / ${host}',
+             |  'value': '${executorId}'
+             |}
+           """.stripMargin
+      }.mkString("[", ",", "]")
+
+      val executorsArrayStr = executorsMap.flatMap {
+        case ((executorId, _), list) =>
+          list.map {
+            case (taskId, launchTime, finishTime) =>
+              s"""
+                 |{
+                 |  'group': '${executorId}',
+                 |  'content': 'Task ${taskId}',
+                 |  'start': new Date(${launchTime}),
+                 |  'end': new Date(${finishTime})
+                 |}
+               """.stripMargin
+          }
+      }.take(500).mkString("[", ",", "]")
+
+
       val content =
         summary ++
         showAdditionalMetrics ++
@@ -338,7 +378,12 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
         <div>{summaryTable.getOrElse("No tasks have reported metrics yet.")}</div> ++
         <h4>Aggregated Metrics by Executor</h4> ++ executorTable.toNodeSeq ++
         maybeAccumulableTable ++
-        <h4>Tasks</h4> ++ taskTable
+        <h4>Tasks</h4> ++ taskTable ++
+        <h4>Task Assignment Timeline</h4> ++
+        <div id="task-assignment-timeline"></div> ++
+        <script type="text/javascript">
+          drawTaskAssignmentTimeline({groupArrayStr}, {executorsArrayStr})
+        </script>
 
       UIUtils.headerSparkPage("Details for Stage %d".format(stageId), content, parent)
     }

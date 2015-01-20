@@ -17,7 +17,7 @@
 
 package org.apache.spark.ui.jobs
 
-import scala.xml.{Node, NodeSeq}
+import scala.xml.{Node, NodeSeq, Unparsed}
 
 import javax.servlet.http.HttpServletRequest
 
@@ -152,7 +152,7 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
         </div>
 
       val _6list = scala.collection.mutable.HashMap[(Int, Int), scala.collection.mutable.ListBuffer[UIData.TaskUIData]]()
-      def _6sigma {
+/*      def _6sigma {
         completedJobs.foreach {
           case uiData =>
             uiData.stageIds.foreach {
@@ -170,21 +170,21 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
                 }
             }
         }
-      }
-      _6sigma
+      }*/
+//      _6sigma
       var content = summary
 
       val jobEventList = listener.completedJobs.map(x => (x.jobId, x.submissionTime.getOrElse(-1), x.completionTime.getOrElse(-1))) ++
         listener.failedJobs.map(x => (x.jobId, x.submissionTime.getOrElse(-1), x.completionTime.getOrElse(-1)))
       val executorAddedEventList = listener.executorIdToAddedTime.map(kv => (kv._1, kv._2))
-      val executorRemovedEventList = listener.executorIdToRemovedTime.map(kv => (kv._1, kv._2))
+      val executorRemovedEventList = listener.executorIdToRemovedTimeAndReason.map(kv => (kv._1, kv._2))
       val jobEventArray = jobEventList.map {
         case (jobId, submissionTime, completionTime) =>
           s"""
             |{
             |  'start': new Date(${submissionTime}),
             |  'end': new Date(${completionTime}),
-            |  'content': 'Job ID=${jobId}'
+            |  'content': 'Job ${jobId}'
             |}
           """.stripMargin
       }
@@ -194,16 +194,16 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
           s"""
             |{
             |  'start': new Date(${addedTime}),
-            |  'content': 'Executor ID=${executorId} added'
+            |  'content': 'Executor ${executorId} added'
             |}
           """.stripMargin
       }
       val executorRemovedEventArray = executorRemovedEventList.map {
-        case (executorId, removedTime) =>
+        case (executorId, (removedTime, reason)) =>
           s"""
             |{
             |  'start': new Date(${removedTime}),
-            |  'content': 'Executor ID=${executorId} removed'
+            |  'content': '<a data-toggle="tooltip" data-placement="auto" title="${reason}">Executor ${executorId} removed</a>'
             |}
           """.stripMargin
       }
@@ -211,10 +211,10 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
       val eventArrayStr =
         (jobEventArray ++ executorAddedEventArray ++ executorRemovedEventArray).mkString("[", ",", "]")
 
-      content ++= <h4>Application Timeline</h4> ++ <div id="application-timeline"></div>
+      content ++= <h4>Events on Application Timeline</h4> ++ <div id="application-timeline"></div>
       content ++=
         <script type="text/javascript">
-          drawApplicationTimeline({eventArrayStr})
+          {Unparsed(s"drawApplicationTimeline(${eventArrayStr});")}
         </script>
 
       if (shouldShowActiveJobs) {
@@ -224,7 +224,7 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
       if (shouldShowCompletedJobs) {
         content ++= <h4 id="completed">Completed Jobs ({completedJobs.size})</h4> ++
           completedJobsTable
-        if (_6list.nonEmpty) {
+/*        if (_6list.nonEmpty) {
           content ++= <table>
             <tr>
               <th>Stage ID</th> <th>Attempt ID</th> <th>Task ID</th> <th>Task Attempt ID</th><th>Executor ID</th><th>Host</th>
@@ -248,7 +248,7 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
                 }
             }}
           </table>
-        }
+        }*/
       }
       if (shouldShowFailedJobs) {
         content ++= <h4 id ="failed">Failed Jobs ({failedJobs.size})</h4> ++
