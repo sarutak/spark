@@ -26,6 +26,7 @@ import scala.collection.JavaConverters._
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV}
 
 import org.apache.spark.SparkException
+import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.mllib.util.NumericParser
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.catalyst.expressions.GenericMutableRow
@@ -110,9 +111,14 @@ sealed trait Vector extends Serializable {
 }
 
 /**
+ * :: DeveloperApi ::
+ *
  * User-defined type for [[Vector]] which allows easy interaction with SQL
  * via [[org.apache.spark.sql.DataFrame]].
+ *
+ * NOTE: This is currently private[spark] but will be made public later once it is stabilized.
  */
+@DeveloperApi
 private[spark] class VectorUDT extends UserDefinedType[Vector] {
 
   override def sqlType: StructType = {
@@ -169,6 +175,17 @@ private[spark] class VectorUDT extends UserDefinedType[Vector] {
   override def pyUDT: String = "pyspark.mllib.linalg.VectorUDT"
 
   override def userClass: Class[Vector] = classOf[Vector]
+
+  override def equals(o: Any): Boolean = {
+    o match {
+      case v: VectorUDT => true
+      case _ => false
+    }
+  }
+
+  override def hashCode: Int = 7919
+
+  private[spark] override def asNullable: VectorUDT = this
 }
 
 /**
@@ -234,7 +251,7 @@ object Vectors {
   }
 
   /**
-   * Creates a dense vector of all zeros.
+   * Creates a vector of all zeros.
    *
    * @param size vector size
    * @return a zero vector
@@ -244,8 +261,7 @@ object Vectors {
   }
 
   /**
-   * Parses a string resulted from `Vector#toString` into
-   * an [[org.apache.spark.mllib.linalg.Vector]].
+   * Parses a string resulted from [[Vector.toString]] into a [[Vector]].
    */
   def parse(s: String): Vector = {
     parseNumeric(NumericParser.parse(s))
@@ -464,7 +480,7 @@ class DenseVector(val values: Array[Double]) extends Vector {
 
   private[mllib] override def toBreeze: BV[Double] = new BDV[Double](values)
 
-  override def apply(i: Int) = values(i)
+  override def apply(i: Int): Double = values(i)
 
   override def copy: DenseVector = {
     new DenseVector(values.clone())
@@ -483,6 +499,7 @@ class DenseVector(val values: Array[Double]) extends Vector {
 }
 
 object DenseVector {
+  /** Extracts the value array from a dense vector. */
   def unapply(dv: DenseVector): Option[Array[Double]] = Some(dv.values)
 }
 

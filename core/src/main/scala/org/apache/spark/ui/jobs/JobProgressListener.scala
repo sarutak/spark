@@ -205,6 +205,9 @@ class JobProgressListener(conf: SparkConf) extends SparkListener with Logging {
     for (stageId <- jobData.stageIds) {
       stageIdToActiveJobIds.get(stageId).foreach { jobsUsingStage =>
         jobsUsingStage.remove(jobEnd.jobId)
+        if (jobsUsingStage.isEmpty) {
+          stageIdToActiveJobIds.remove(stageId)
+        }
         stageIdToInfo.get(stageId).foreach { stageInfo =>
           if (stageInfo.submissionTime.isEmpty) {
             // if this stage is pending, it won't complete, so mark it as "skipped":
@@ -396,11 +399,23 @@ class JobProgressListener(conf: SparkConf) extends SparkListener with Logging {
     stageData.shuffleWriteBytes += shuffleWriteDelta
     execSummary.shuffleWrite += shuffleWriteDelta
 
+    val shuffleWriteRecordsDelta =
+      (taskMetrics.shuffleWriteMetrics.map(_.shuffleRecordsWritten).getOrElse(0L)
+      - oldMetrics.flatMap(_.shuffleWriteMetrics).map(_.shuffleRecordsWritten).getOrElse(0L))
+    stageData.shuffleWriteRecords += shuffleWriteRecordsDelta
+    execSummary.shuffleWriteRecords += shuffleWriteRecordsDelta
+
     val shuffleReadDelta =
-      (taskMetrics.shuffleReadMetrics.map(_.remoteBytesRead).getOrElse(0L)
-      - oldMetrics.flatMap(_.shuffleReadMetrics).map(_.remoteBytesRead).getOrElse(0L))
-    stageData.shuffleReadBytes += shuffleReadDelta
+      (taskMetrics.shuffleReadMetrics.map(_.totalBytesRead).getOrElse(0L)
+        - oldMetrics.flatMap(_.shuffleReadMetrics).map(_.totalBytesRead).getOrElse(0L))
+    stageData.shuffleReadTotalBytes += shuffleReadDelta
     execSummary.shuffleRead += shuffleReadDelta
+
+    val shuffleReadRecordsDelta =
+      (taskMetrics.shuffleReadMetrics.map(_.recordsRead).getOrElse(0L)
+      - oldMetrics.flatMap(_.shuffleReadMetrics).map(_.recordsRead).getOrElse(0L))
+    stageData.shuffleReadRecords += shuffleReadRecordsDelta
+    execSummary.shuffleReadRecords += shuffleReadRecordsDelta
 
     val inputBytesDelta =
       (taskMetrics.inputMetrics.map(_.bytesRead).getOrElse(0L)
@@ -408,11 +423,23 @@ class JobProgressListener(conf: SparkConf) extends SparkListener with Logging {
     stageData.inputBytes += inputBytesDelta
     execSummary.inputBytes += inputBytesDelta
 
+    val inputRecordsDelta =
+      (taskMetrics.inputMetrics.map(_.recordsRead).getOrElse(0L)
+      - oldMetrics.flatMap(_.inputMetrics).map(_.recordsRead).getOrElse(0L))
+    stageData.inputRecords += inputRecordsDelta
+    execSummary.inputRecords += inputRecordsDelta
+
     val outputBytesDelta =
       (taskMetrics.outputMetrics.map(_.bytesWritten).getOrElse(0L)
         - oldMetrics.flatMap(_.outputMetrics).map(_.bytesWritten).getOrElse(0L))
     stageData.outputBytes += outputBytesDelta
     execSummary.outputBytes += outputBytesDelta
+
+    val outputRecordsDelta =
+      (taskMetrics.outputMetrics.map(_.recordsWritten).getOrElse(0L)
+        - oldMetrics.flatMap(_.outputMetrics).map(_.recordsWritten).getOrElse(0L))
+    stageData.outputRecords += outputRecordsDelta
+    execSummary.outputRecords += outputRecordsDelta
 
     val diskSpillDelta =
       taskMetrics.diskBytesSpilled - oldMetrics.map(_.diskBytesSpilled).getOrElse(0L)

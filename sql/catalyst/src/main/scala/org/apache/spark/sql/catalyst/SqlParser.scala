@@ -35,7 +35,17 @@ import org.apache.spark.sql.types._
  * This is currently included mostly for illustrative purposes.  Users wanting more complete support
  * for a SQL like language should checkout the HiveQL support in the sql/hive sub-project.
  */
-class SqlParser extends AbstractSparkSQLParser {
+class SqlParser extends AbstractSparkSQLParser with DataTypeParser {
+
+  def parseExpression(input: String): Expression = {
+    // Initialize the Keywords.
+    lexical.initialize(reservedWords)
+    phrase(projection)(new lexical.Scanner(input)) match {
+      case Success(plan, _) => plan
+      case failureOrError => sys.error(failureOrError.toString)
+    }
+  }
+
   // Keyword is a convention with AbstractSparkSQLParser, which will scan all of the `Keyword`
   // properties via reflection the class in runtime for constructing the SqlLexical object
   protected val ABS = Keyword("ABS")
@@ -47,14 +57,12 @@ class SqlParser extends AbstractSparkSQLParser {
   protected val AVG = Keyword("AVG")
   protected val BETWEEN = Keyword("BETWEEN")
   protected val BY = Keyword("BY")
-  protected val CACHE = Keyword("CACHE")
   protected val CASE = Keyword("CASE")
   protected val CAST = Keyword("CAST")
+  protected val COALESCE = Keyword("COALESCE")
   protected val COUNT = Keyword("COUNT")
-  protected val DECIMAL = Keyword("DECIMAL")
   protected val DESC = Keyword("DESC")
   protected val DISTINCT = Keyword("DISTINCT")
-  protected val DOUBLE = Keyword("DOUBLE")
   protected val ELSE = Keyword("ELSE")
   protected val END = Keyword("END")
   protected val EXCEPT = Keyword("EXCEPT")
@@ -93,13 +101,11 @@ class SqlParser extends AbstractSparkSQLParser {
   protected val SELECT = Keyword("SELECT")
   protected val SEMI = Keyword("SEMI")
   protected val SQRT = Keyword("SQRT")
-  protected val STRING = Keyword("STRING")
   protected val SUBSTR = Keyword("SUBSTR")
   protected val SUBSTRING = Keyword("SUBSTRING")
   protected val SUM = Keyword("SUM")
   protected val TABLE = Keyword("TABLE")
   protected val THEN = Keyword("THEN")
-  protected val TIMESTAMP = Keyword("TIMESTAMP")
   protected val TRUE = Keyword("TRUE")
   protected val UNION = Keyword("UNION")
   protected val UPPER = Keyword("UPPER")
@@ -146,8 +152,8 @@ class SqlParser extends AbstractSparkSQLParser {
       }
 
   protected lazy val insert: Parser[LogicalPlan] =
-    INSERT ~> OVERWRITE.? ~ (INTO ~> relation) ~ select ^^ {
-      case o ~ r ~ s => InsertIntoTable(r, Map.empty[String, Option[String]], s, o.isDefined)
+    INSERT ~> (OVERWRITE ^^^ true | INTO ^^^ false) ~ (TABLE ~> relation) ~ select ^^ {
+      case o ~ r ~ s => InsertIntoTable(r, Map.empty[String, Option[String]], s, o)
     }
 
   protected lazy val projection: Parser[Expression] =
@@ -295,6 +301,7 @@ class SqlParser extends AbstractSparkSQLParser {
       { case s ~ p => Substring(s, p, Literal(Integer.MAX_VALUE)) }
     | (SUBSTR | SUBSTRING) ~ "(" ~> expression ~ ("," ~> expression) ~ ("," ~> expression) <~ ")" ^^
       { case s ~ p ~ l => Substring(s, p, l) }
+    | COALESCE ~ "(" ~> repsep(expression, ",") <~ ")" ^^ { case exprs => Coalesce(exprs) }
     | SQRT  ~ "(" ~> expression <~ ")" ^^ { case exp => Sqrt(exp) }
     | ABS   ~ "(" ~> expression <~ ")" ^^ { case exp => Abs(exp) }
     | ident ~ ("(" ~> repsep(expression, ",")) <~ ")" ^^
@@ -302,7 +309,9 @@ class SqlParser extends AbstractSparkSQLParser {
     )
 
   protected lazy val cast: Parser[Expression] =
-    CAST ~ "(" ~> expression ~ (AS ~> dataType) <~ ")" ^^ { case exp ~ t => Cast(exp, t) }
+    CAST ~ "(" ~> expression ~ (AS ~> dataType) <~ ")" ^^ {
+      case exp ~ t => Cast(exp, t)
+    }
 
   protected lazy val literal: Parser[Literal] =
     ( numericLiteral
@@ -360,7 +369,7 @@ class SqlParser extends AbstractSparkSQLParser {
     | expression ~ ("[" ~> expression <~ "]") ^^
       { case base ~ ordinal => GetItem(base, ordinal) }
     | (expression <~ ".") ~ ident ^^
-      { case base ~ fieldName => GetField(base, fieldName) }
+      { case base ~ fieldName => UnresolvedGetField(base, fieldName) }
     | cast
     | "(" ~> expression <~ ")"
     | function
@@ -372,19 +381,6 @@ class SqlParser extends AbstractSparkSQLParser {
 
   protected lazy val dotExpressionHeader: Parser[Expression] =
     (ident <~ ".") ~ ident ~ rep("." ~> ident) ^^ {
-      case i1 ~ i2 ~ rest => UnresolvedAttribute(i1 + "." + i2 + rest.mkString(".", ".", ""))
-    }
-
-  protected lazy val dataType: Parser[DataType] =
-    ( STRING ^^^ StringType
-    | TIMESTAMP ^^^ TimestampType
-    | DOUBLE ^^^ DoubleType
-    | fixedDecimalType
-    | DECIMAL ^^^ DecimalType.Unlimited
-    )
-
-  protected lazy val fixedDecimalType: Parser[DataType] =
-    (DECIMAL ~ "(" ~> numericLit) ~ ("," ~> numericLit <~ ")") ^^ {
-      case precision ~ scale => DecimalType(precision.toInt, scale.toInt)
+      case i1 ~ i2 ~ rest => UnresolvedAttribute((Seq(i1, i2) ++ rest).mkString("."))
     }
 }
