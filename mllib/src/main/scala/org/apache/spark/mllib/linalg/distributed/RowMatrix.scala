@@ -30,7 +30,6 @@ import org.apache.spark.Logging
 import org.apache.spark.SparkContext._
 import org.apache.spark.annotation.Experimental
 import org.apache.spark.mllib.linalg._
-import org.apache.spark.mllib.rdd.RDDFunctions._
 import org.apache.spark.mllib.stat.{MultivariateOnlineSummarizer, MultivariateStatisticalSummary}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.util.random.XORShiftRandom
@@ -152,10 +151,10 @@ class RowMatrix(
    * storing the right singular vectors, is computed via matrix multiplication as
    * U = A * (V * S^-1^), if requested by user. The actual method to use is determined
    * automatically based on the cost:
-   *  - If n is small (n &lt; 100) or k is large compared with n (k > n / 2), we compute the Gramian
-   *    matrix first and then compute its top eigenvalues and eigenvectors locally on the driver.
-   *    This requires a single pass with O(n^2^) storage on each executor and on the driver, and
-   *    O(n^2^ k) time on the driver.
+   *  - If n is small (n &lt; 100) or k is large compared with n (k &gt; n / 2), we compute
+   *    the Gramian matrix first and then compute its top eigenvalues and eigenvectors locally
+   *    on the driver. This requires a single pass with O(n^2^) storage on each executor and
+   *    on the driver, and O(n^2^ k) time on the driver.
    *  - Otherwise, we compute (A' * A) * v in a distributive way and send it to ARPACK's DSAUPD to
    *    compute (A' * A)'s top eigenvalues and eigenvectors on the driver node. This requires O(k)
    *    passes, O(n) storage on each executor, and O(n k) storage on the driver.
