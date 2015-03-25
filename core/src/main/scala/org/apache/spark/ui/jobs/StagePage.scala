@@ -434,16 +434,27 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
       val maybeAccumulableTable: Seq[Node] =
         if (accumulables.size > 0) { <h4>Accumulators</h4> ++ accumulableTable } else Seq()
 
-      val executorsMap = new HashMap[(String, String), ListBuffer[(Long, Long, Long)]]
+      val executorsMap = new HashMap[(String, String), ListBuffer[(Long, Long, Long, Long, Long, Long, Long)]]
       stageData.taskData.foreach { kv =>
         val taskId = kv._1
         val data = kv._2
+        val metrics = data.taskMetrics.get
         val executorId = data.taskInfo.executorId
         val host = data.taskInfo.host
         val launchTime = data.taskInfo.launchTime
-        val finishTime = data.taskInfo.finishTime
-        executorsMap.getOrElseUpdate((executorId, host), new ListBuffer[(Long, Long, Long)])
-          .append((taskId, launchTime, finishTime))
+        val finishTime = if (data.taskInfo.gettingResult)  data.taskInfo.gettingResultTime else data.taskInfo.finishTime
+
+        val totalExecutionTime = finishTime - launchTime
+        val overHead = metrics.executorDeserializeTime + metrics.resultSerializationTime
+        val schedulerDelay = totalExecutionTime - metrics.executorRunTime - overHead
+
+        val executorRuntimeProportion = (metrics.executorRunTime.toDouble / totalExecutionTime * 100).toLong
+        val serializationTimeProportion = (metrics.resultSerializationTime.toDouble / totalExecutionTime * 100).toLong
+        val deserializationTimeProportion = (metrics.executorDeserializeTime.toDouble / totalExecutionTime * 100).toLong
+        val schedulerDelayProportion = 100 - executorRuntimeProportion - serializationTimeProportion - deserializationTimeProportion
+
+        executorsMap.getOrElseUpdate((executorId, host), new ListBuffer[(Long, Long, Long, Long, Long, Long, Long)])
+          .append((taskId, launchTime, finishTime, deserializationTimeProportion, executorRuntimeProportion, serializationTimeProportion, schedulerDelayProportion))
       }
 
       val groupArrayStr = executorsMap.map {
@@ -460,18 +471,21 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
       val executorsArrayStr = executorsMap.flatMap {
         case ((executorId, _), list) =>
           list.map {
-            case (taskId, launchTime, finishTime) =>
+            case (taskId, launchTime, finishTime, deserializationTimeProportion, executorRuntimeProportion, serializationTimeProportion, schedulerDeleyProportion) =>
               s"""
                  |{
                  |  'group': '${executorId}',
-                 |  'content': 'Task ${taskId}',
+                 |  'content': '<div style="width: 100%; height: 50%;">Task ${taskId}</div><svg style="width: 100%; height: 50%;">' +
+                 |             '<rect x="0" y="0" width="${deserializationTimeProportion}%" height="100%" fill="#FF0000"></rect>' +
+                 |             '<rect x="${deserializationTimeProportion}%" y="0" width="${executorRuntimeProportion}%" height="100%" fill="#00FF00"></rect>' +
+                 |             '<rect x="${deserializationTimeProportion + executorRuntimeProportion}%" y="0" width="${serializationTimeProportion}%" height="100%" fill="#0000FF"></rect>' +
+                 |             '<rect x="${deserializationTimeProportion + executorRuntimeProportion + serializationTimeProportion}%" y="0" width="${schedulerDeleyProportion}%" height="100%" fill="#FFFF00"></rect></svg>',
                  |  'start': new Date(${launchTime}),
                  |  'end': new Date(${finishTime})
                  |}
                """.stripMargin
           }
       }.mkString("[", ",", "]")
-
 
       val content =
         summary ++
@@ -484,7 +498,7 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
         <h4>Task Assignment Timeline</h4> ++
         <div id="task-assignment-timeline"></div> ++
         <script type="text/javascript">
-          drawTaskAssignmentTimeline({groupArrayStr}, {executorsArrayStr})
+          {Unparsed(s"drawTaskAssignmentTimeline(${groupArrayStr}, ${executorsArrayStr})")}
         </script>
 
       UIUtils.headerSparkPage("Details for Stage %d".format(stageId), content, parent)

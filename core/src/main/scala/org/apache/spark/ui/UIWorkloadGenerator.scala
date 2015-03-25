@@ -105,6 +105,7 @@ private[spark] object UIWorkloadGenerator {
         Thread.sleep(INTER_JOB_WAIT_MS)
       }
     }
+
     sc.stop()
   }
 }
