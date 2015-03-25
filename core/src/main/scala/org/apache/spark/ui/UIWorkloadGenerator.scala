@@ -17,6 +17,8 @@
 
 package org.apache.spark.ui
 
+import java.util.concurrent.Semaphore
+
 import scala.util.Random
 
 import org.apache.spark.{SparkConf, SparkContext}
@@ -88,6 +90,8 @@ private[spark] object UIWorkloadGenerator {
       ("Job with delays", baseData.map(x => Thread.sleep(100)).count)
     )
 
+    val barrier = new Semaphore(-nJobSet * jobs.size + 1)
+
     (1 to nJobSet).foreach { _ =>
       for ((desc, job) <- jobs) {
         new Thread {
@@ -99,6 +103,8 @@ private[spark] object UIWorkloadGenerator {
             } catch {
               case e: Exception =>
                 println("Job Failed: " + desc)
+            } finally {
+              barrier.release()
             }
           }
         }.start
@@ -106,6 +112,8 @@ private[spark] object UIWorkloadGenerator {
       }
     }
 
+    // Waiting for threads.
+    barrier.acquire()
     sc.stop()
   }
 }
