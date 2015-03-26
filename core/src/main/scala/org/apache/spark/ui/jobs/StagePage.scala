@@ -432,27 +432,46 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
       val maybeAccumulableTable: Seq[Node] =
         if (accumulables.size > 0) { <h4>Accumulators</h4> ++ accumulableTable } else Seq()
 
-      val executorsMap = new HashMap[(String, String), ListBuffer[(Long, Long, Long, Long, Long, Long, Long)]]
+      val executorsMap =
+        new HashMap[(String, String), ListBuffer[(Long, Long, Long, Long, Long, Long, Long, Long, Long, Long)]]
       stageData.taskData.foreach { kv =>
         val taskId = kv._1
         val data = kv._2
+        val taskInfo = data.taskInfo
         val metrics = data.taskMetrics.get
         val executorId = data.taskInfo.executorId
         val host = data.taskInfo.host
-        val launchTime = data.taskInfo.launchTime
-        val finishTime = if (data.taskInfo.gettingResult)  data.taskInfo.gettingResultTime else data.taskInfo.finishTime
-
+        val launchTime = taskInfo.launchTime
+        val finishTime = taskInfo.finishTime
         val totalExecutionTime = finishTime - launchTime
-        val overHead = metrics.executorDeserializeTime + metrics.resultSerializationTime
-        val schedulerDelay = totalExecutionTime - metrics.executorRunTime - overHead
 
-        val executorRuntimeProportion = (metrics.executorRunTime.toDouble / totalExecutionTime * 100).toLong
-        val serializationTimeProportion = (metrics.resultSerializationTime.toDouble / totalExecutionTime * 100).toLong
-        val deserializationTimeProportion = (metrics.executorDeserializeTime.toDouble / totalExecutionTime * 100).toLong
-        val schedulerDelayProportion = 100 - executorRuntimeProportion - serializationTimeProportion - deserializationTimeProportion
+        val shuffleReadTime =
+          metrics.shuffleReadMetrics.map(_.fetchWaitTime).getOrElse(0L).toDouble
+        val shuffleReadTimeProportion =
+          (shuffleReadTime / totalExecutionTime * 100).toLong
+        val shuffleWriteTime =
+          metrics.shuffleWriteMetrics.map(_.shuffleWriteTime).getOrElse(0L) / 1e6
+        val shuffleWriteTimeProportion =
+          (shuffleWriteTime / totalExecutionTime * 100).toLong
+        val executorRuntimeProportion =
+          ((metrics.executorRunTime - shuffleReadTime - shuffleWriteTime) /
+            totalExecutionTime * 100).toLong
+        val serializationTimeProportion =
+          (metrics.resultSerializationTime.toDouble / totalExecutionTime * 100).toLong
+        val deserializationTimeProportion =
+          (metrics.executorDeserializeTime.toDouble / totalExecutionTime * 100).toLong
+        val gettingResultTimeProportion =
+          (getGettingResultTime(data.taskInfo).toDouble / totalExecutionTime * 100).toLong
+        val schedulerDelayProportion =
+          100 - executorRuntimeProportion - shuffleReadTimeProportion -
+            shuffleWriteTimeProportion - serializationTimeProportion -
+            deserializationTimeProportion - gettingResultTimeProportion
 
-        executorsMap.getOrElseUpdate((executorId, host), new ListBuffer[(Long, Long, Long, Long, Long, Long, Long)])
-          .append((taskId, launchTime, finishTime, deserializationTimeProportion, executorRuntimeProportion, serializationTimeProportion, schedulerDelayProportion))
+        executorsMap.getOrElseUpdate((executorId, host),
+          new ListBuffer[(Long, Long, Long, Long, Long, Long, Long, Long, Long, Long)])
+          .append((taskId, launchTime, finishTime, deserializationTimeProportion,
+            executorRuntimeProportion, shuffleReadTimeProportion, shuffleWriteTimeProportion,
+          serializationTimeProportion, gettingResultTimeProportion, schedulerDelayProportion))
       }
 
       val groupArrayStr = executorsMap.map {
@@ -469,15 +488,29 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
       val executorsArrayStr = executorsMap.flatMap {
         case ((executorId, _), list) =>
           list.map {
-            case (taskId, launchTime, finishTime, deserializationTimeProportion, executorRuntimeProportion, serializationTimeProportion, schedulerDeleyProportion) =>
+            case (taskId, launchTime, finishTime, deserializationTimeProportion, executorRuntimeProportion,
+              shuffleReadTimeProportion, shuffleWriteTimeProportion, serializationTimeProportion,
+              gettingResultTimeProportion, schedulerDeleyProportion) =>
+
+              val schedulerDelayProportionPos = 0
+              val deserializationTimeProportionPos = schedulerDelayProportionPos + schedulerDeleyProportion
+              val executorRuntimeProportionPos = deserializationTimeProportionPos + deserializationTimeProportion
+              val shuffleReadTimeProportionPos = executorRuntimeProportionPos + executorRuntimeProportion
+              val shuffleWriteTimeProportionPos = shuffleReadTimeProportionPos + shuffleReadTimeProportion
+              val serializationTimeProportionPos = shuffleWriteTimeProportionPos + shuffleWriteTimeProportion
+              val gettingResultTimeProportionPos = serializationTimeProportionPos + serializationTimeProportion
+
               s"""
                  |{
                  |  'group': '${executorId}',
                  |  'content': '<div style="width: 100%; height: 50%;">Task ${taskId}</div><svg style="width: 100%; height: 50%;">' +
-                 |             '<rect x="0" y="0" width="${deserializationTimeProportion}%" height="100%" fill="#FF0000"></rect>' +
-                 |             '<rect x="${deserializationTimeProportion}%" y="0" width="${executorRuntimeProportion}%" height="100%" fill="#00FF00"></rect>' +
-                 |             '<rect x="${deserializationTimeProportion + executorRuntimeProportion}%" y="0" width="${serializationTimeProportion}%" height="100%" fill="#0000FF"></rect>' +
-                 |             '<rect x="${deserializationTimeProportion + executorRuntimeProportion + serializationTimeProportion}%" y="0" width="${schedulerDeleyProportion}%" height="100%" fill="#FFFF00"></rect></svg>',
+                 |             '<rect x="${schedulerDelayProportionPos}%" y="0" width="${schedulerDeleyProportion}%" y="0" height="100%" fill="#D6254D"></rect>' +
+                 |             '<rect x="${deserializationTimeProportionPos}%" y="0" width="${deserializationTimeProportion}%" height="100%" fill="#FFBDD8"></rect>' +
+                 |             '<rect x="${executorRuntimeProportionPos}%" y="0" width="${executorRuntimeProportion}%" height="100%" fill="#D9EB52"></rect>' +
+                 |             '<rect x="${shuffleReadTimeProportionPos}%" y="0" width="${shuffleReadTimeProportion}%" height="100%" fill="#8AC7DE"></rect>' +
+                 |             '<rect x="${shuffleWriteTimeProportionPos}%" y="0" width="${shuffleWriteTimeProportion}%" height="100%" fill="#87796F"></rect>' +
+                 |             '<rect x="${serializationTimeProportionPos}%" y="0" width="${serializationTimeProportion}%" height="100%" fill="#93DFB8"></rect>' +
+                 |             '<rect x="${gettingResultTimeProportionPos}%" y="0" width="${gettingResultTimeProportion}%" height="100%" fill="#FF9036"></rect></svg>',
                  |  'start': new Date(${launchTime}),
                  |  'end': new Date(${finishTime})
                  |}
@@ -493,14 +526,36 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
         <h4>Aggregated Metrics by Executor</h4> ++ executorTable.toNodeSeq ++
         maybeAccumulableTable ++
         <h4>Tasks</h4> ++ taskTable ++
-        <h4>Task Assignment Timeline</h4> ++
-        <div id="task-assignment-timeline"></div> ++
+        <h4 style="float: left;">Task Assignment Timeline</h4> ++
+          taskAssignmentTimelineLegend ++
+        <div id="task-assignment-timeline" style="clear: both;"></div> ++
         <script type="text/javascript">
           {Unparsed(s"drawTaskAssignmentTimeline(${groupArrayStr}, ${executorsArrayStr})")}
         </script>
 
       UIUtils.headerSparkPage("Details for Stage %d".format(stageId), content, parent)
     }
+  }
+
+  def taskAssignmentTimelineLegend: Seq[Node] = {
+
+    <div style="width: 700px; float: right;">
+      <div style="float: left;"><input id="task-timeline-zoom-lock" type="checkbox" checked="checked"></input>Zoom Lock</div>
+      <svg style="width: 600px; height: 50px; float: right; border: 1px solid #000000;">
+        {
+        val legendPairs = List(("#FFBDD8", "Task Deserialization Time"),
+          ("#D9EB52", "Executor Computing Time"), ("#8AC7DE", "Shuffle Read Time"),
+          ("#87796F", "Shuffle Write Time"), ("#93DFB8", "Result Serialization TIme"),
+          ("#FF9036", "Getting Result Time"), ("#D6254D", "Scheduler Delay"))
+
+        legendPairs.zipWithIndex.map {
+          case ((color, name), index) =>
+            <rect x={5 + (index / 3) * 210 + "px"} y={5 + (index % 3) * 15 + "px"} width="10px" height="10px" fill={color}></rect>
+              <text x={25 + (index / 3) * 210 + "px"} y={15 + (index % 3) * 15 + "px"}>{name}</text>
+        }
+        }
+      </svg>
+    </div>
   }
 
   def taskRow(

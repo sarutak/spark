@@ -35,6 +35,7 @@ function drawJobTimeline(eventObjArray) {
   var timeline = new vis.Timeline(container, visDataSet, options);
 }
 
+var taskTimeline
 function drawTaskAssignmentTimeline(groupArray, eventObjArray) {
   var groups = new vis.DataSet(groupArray);
   var items = new vis.DataSet(eventObjArray);
@@ -45,13 +46,24 @@ function drawTaskAssignmentTimeline(groupArray, eventObjArray) {
       return a.value - b.value
     },
     editable: false,
-    align: 'left'
+    align: 'left',
+    selectable: false,
+    showCurrentTime: false,
+    zoomable: false
   };
 
-  var timeline = new vis.Timeline(container)
-  timeline.setOptions(options);
-  timeline.setGroups(groups);
-  timeline.setItems(items);
+  taskTimeline = new vis.Timeline(container)
+  taskTimeline.setOptions(options);
+  taskTimeline.setGroups(groups);
+  taskTimeline.setItems(items);
+
+  $("#task-timeline-zoom-lock").click(function() {
+    if (this.checked) {
+      taskTimeline.setOptions({zoomable: false})
+    } else {
+      taskTimeline.setOptions({zoomable: true})
+    }
+  })
 
   $("div.item.range").map(function(idx, elem) {
     return elem.setAttribute("style", elem.getAttribute("style") + " padding: 0px 0px 0px 0px; height: 40px;"
