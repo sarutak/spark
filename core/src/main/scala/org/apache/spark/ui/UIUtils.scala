@@ -165,7 +165,6 @@ private[spark] object UIUtils extends Logging {
     <script src={prependBaseUri("/static/sorttable.js")} ></script>
     <script src={prependBaseUri("/static/jquery-1.11.1.min.js")}></script>
     <script src={prependBaseUri("/static/vis.min.js")}></script>
-    <script src={prependBaseUri("/static/d3.min.js")}></script>
     <script src={prependBaseUri("/static/bootstrap-tooltip.js")}></script>
     <script src={prependBaseUri("/static/initialize-tooltips.js")}></script>
     <script src={prependBaseUri("/static/table.js")}></script>

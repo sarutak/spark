@@ -153,27 +153,6 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
           </ul>
         </div>
 
-      val _6list = scala.collection.mutable.HashMap[(Int, Int), scala.collection.mutable.ListBuffer[UIData.TaskUIData]]()
-/*      def _6sigma {
-        completedJobs.foreach {
-          case uiData =>
-            uiData.stageIds.foreach {
-              case stageId =>
-                val stageInfo = listener.stageIdToInfo(stageId)
-                val stageData = listener.stageIdToData.get(stageInfo.stageId, stageInfo.attemptId).get
-                val tasks = stageData.taskData.values.toSeq.sortBy(_.taskInfo.launchTime)
-                val avg: Double = tasks.foldLeft[Double](0)(_ + _.taskInfo.duration) / tasks.length
-                val std: Double = math.sqrt(tasks.map(x => math.pow(x.taskInfo.duration - avg, 2)).reduce(_ + _) / tasks.length)
-                tasks.foreach {
-                  task =>
-                    if (avg - 6 * std > task.taskInfo.duration || avg + 6 * std < task.taskInfo.duration) {
-                      _6list.getOrElseUpdate((stageInfo.stageId, stageInfo.attemptId), new scala.collection.mutable.ListBuffer[UIData.TaskUIData]()).append(task)
-                    }
-                }
-            }
-        }
-      }*/
-//      _6sigma
       var content = summary
 
       val jobEventList = listener.completedJobs.map(x => (x.jobId, x.submissionTime.getOrElse(-1), x.completionTime.getOrElse(-1))) ++
@@ -226,31 +205,6 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
       if (shouldShowCompletedJobs) {
         content ++= <h4 id="completed">Completed Jobs ({completedJobs.size})</h4> ++
           completedJobsTable
-/*        if (_6list.nonEmpty) {
-          content ++= <table>
-            <tr>
-              <th>Stage ID</th> <th>Attempt ID</th> <th>Task ID</th> <th>Task Attempt ID</th><th>Executor ID</th><th>Host</th>
-            </tr>{_6list.keysIterator.flatMap {
-              case (stageId, stageAttemptId) =>
-                _6list((stageId, stageAttemptId)).map {
-                  value =>
-                    <tr>
-                      <td>
-                        {stageId}
-                      </td> <td>
-                      {stageAttemptId}
-                    </td> <td>
-                      {value.taskInfo.taskId}
-                    </td><td>
-                      {value.taskInfo.attempt}</td>
-                      <td>{value.taskInfo.duration}</td>
-                      <td>{value.taskInfo.executorId}</td>
-                      <td>{value.taskInfo.host}</td>
-                    </tr>
-                }
-            }}
-          </table>
-        }*/
       }
       if (shouldShowFailedJobs) {
         content ++= <h4 id ="failed">Failed Jobs ({failedJobs.size})</h4> ++
