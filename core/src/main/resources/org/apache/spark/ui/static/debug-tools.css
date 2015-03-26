@@ -22,6 +22,10 @@ div#application-timeline, div#job-timeline {
 div.item.range {
   height: 40px;
 }
+
+div.failed-task {
+  background: #FF5475;
+}
 /*
 div.item.range>div {
   position: absolute;
