@@ -155,47 +155,73 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
 
       var content = summary
 
-      val jobEventList = listener.completedJobs.map(x => (x.jobId, x.submissionTime.getOrElse(-1), x.completionTime.getOrElse(-1))) ++
-        listener.failedJobs.map(x => (x.jobId, x.submissionTime.getOrElse(-1), x.completionTime.getOrElse(-1)))
-      val executorAddedEventList = listener.executorIdToAddedTime.map(kv => (kv._1, kv._2))
-      val executorRemovedEventList = listener.executorIdToRemovedTimeAndReason.map(kv => (kv._1, kv._2))
-      val jobEventArray = jobEventList.map {
-        case (jobId, submissionTime, completionTime) =>
+      val groupArrayStr =
+        s"""
+          |[
+          |  {
+          |    'id': 'executors',
+          |    'content': 'Executors',
+          |    'value': 'executors'
+          |  },
+          |  {
+          |    'id': 'jobs',
+          |    'content': 'Jobs',
+          |    'value': 'jobs'
+          |  }
+          |]
+        """.stripMargin
+
+
+      val jobEventArray = (listener.completedJobs.map { completedJobData =>
+        (completedJobData.jobId, completedJobData.submissionTime.getOrElse(-1),
+         completedJobData.completionTime.getOrElse(-1), true)
+      } ++ listener.failedJobs.map { faildJobData =>
+        (faildJobData.jobId, faildJobData.submissionTime.getOrElse(-1),
+         faildJobData.completionTime.getOrElse(-1), false)
+      }).map {
+        case (jobId, submissionTime, completionTime, succeeded) =>
           s"""
             |{
+            |  'group': 'jobs',
             |  'start': new Date(${submissionTime}),
             |  'end': new Date(${completionTime}),
-            |  'content': 'Job ${jobId}'
+            |  'content': '<div class=${if (succeeded) "succeeded-job" else "failed-job"}>' +
+            |    'Job ${jobId}</div>'
             |}
           """.stripMargin
       }
 
-      val executorAddedEventArray = executorAddedEventList.map {
+      val executorAddedEventArray = listener.executorIdToAddedTime.map {
         case (executorId, addedTime) =>
           s"""
             |{
+            |  'group': 'executors',
             |  'start': new Date(${addedTime}),
-            |  'content': 'Executor ${executorId} added'
+            |  'content': '<div class="executor-added">Executor ${executorId} added</div>'
             |}
           """.stripMargin
       }
-      val executorRemovedEventArray = executorRemovedEventList.map {
+
+      val executorRemovedEventArray = listener.executorIdToRemovedTimeAndReason.map {
         case (executorId, (removedTime, reason)) =>
           s"""
             |{
+            |  'group': 'executors',
             |  'start': new Date(${removedTime}),
-            |  'content': '<a data-toggle="tooltip" data-placement="auto" title="${reason}">Executor ${executorId} removed</a>'
+            |  'content': '<a data-toggle="tooltip" data-placement="auto"' +
+            |             ' title="${reason}">Executor ${executorId} removed</a>'
             |}
           """.stripMargin
       }
 
       val eventArrayStr =
-        (jobEventArray ++ executorAddedEventArray ++ executorRemovedEventArray).mkString("[", ",", "]")
+        (jobEventArray ++ executorAddedEventArray ++
+          executorRemovedEventArray).mkString("[", ",", "]")
 
       content ++= <h4>Events on Application Timeline</h4> ++ <div id="application-timeline"></div>
       content ++=
         <script type="text/javascript">
-          {Unparsed(s"drawApplicationTimeline(${eventArrayStr});")}
+          {Unparsed(s"drawApplicationTimeline(${groupArrayStr}, ${eventArrayStr});")}
         </script>
 
       if (shouldShowActiveJobs) {

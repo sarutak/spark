@@ -15,27 +15,44 @@
  * limitations under the License.
  */
 
-function drawApplicationTimeline(eventObjArray) {
-  var visDataSet = new vis.DataSet(eventObjArray);
+function drawApplicationTimeline(groupArray, eventObjArray) {
+var groups = new vis.DataSet(groupArray);
+  var items = new vis.DataSet(eventObjArray);
+  var container = $("#application-timeline")[0];
   var options = {
-    editable: false
+    groupOrder: function(a, b) {
+      return a.value - b.value
+    },
+    editable: false,
+    selectable: false,
+    showCurrentTime: false,
+    zoomable: false
   };
 
-  var container = document.getElementById('application-timeline');
-  var timeline = new vis.Timeline(container, visDataSet, options);
+  //var container = document.getElementById('application-timeline');
+
+  //var timeline = new vis.Timeline(container, items, options);
+  var applicationTimeline = new vis.Timeline(container);
+  applicationTimeline.setOptions(options);
+  applicationTimeline.setGroups(groups);
+  applicationTimeline.setItems(items);
 }
 
 function drawJobTimeline(eventObjArray) {
   var visDataSet = new vis.DataSet(eventObjArray);
   var options = {
-    editable: false
+    editable: false,
+    align: 'left',
+    selectable: false,
+    showCurrentTime: false,
+    zoomable: false,
   };
 
   var container = document.getElementById('job-timeline');
   var timeline = new vis.Timeline(container, visDataSet, options);
 }
 
-var taskTimeline
+//var taskTimeline
 function drawTaskAssignmentTimeline(groupArray, eventObjArray) {
   var groups = new vis.DataSet(groupArray);
   var items = new vis.DataSet(eventObjArray);
@@ -52,11 +69,11 @@ function drawTaskAssignmentTimeline(groupArray, eventObjArray) {
     zoomable: false
   };
 
-  taskTimeline = new vis.Timeline(container)
+  var taskTimeline = new vis.Timeline(container)
   taskTimeline.setOptions(options);
   taskTimeline.setGroups(groups);
   taskTimeline.setItems(items);
-
+/*
   $("#task-timeline-zoom-lock").click(function() {
     if (this.checked) {
       taskTimeline.setOptions({zoomable: false})
@@ -64,42 +81,24 @@ function drawTaskAssignmentTimeline(groupArray, eventObjArray) {
       taskTimeline.setOptions({zoomable: true})
     }
   })
+*/
+  setupZoomable("#task-timeline-zoom-lock", taskTimeline)
 
   $("div.item.range").map(function(idx, elem) {
-    return elem.setAttribute("style", elem.getAttribute("style") + " padding: 0px 0px 0px 0px; height: 40px;"
-      /* + " position: relative; height: 36px;"*/);
+    return elem.setAttribute("style", elem.getAttribute("style") + " padding: 0px 0px 0px 0px; height: 40px;");
   });
 
   $("div.item.range>div").map(function(idx, elem) {
-    return elem.setAttribute("style", elem.getAttribute("style") + " height: 100%; width: 100%;"/* +
-      " position: absolute; height: 100%; width: 100%;"*/);
+    return elem.setAttribute("style", elem.getAttribute("style") + " height: 100%; width: 100%;");
   });
 }
 
-/*
-var data = new vis.DataSet([
-          {
-          jobEventList.map {
-            case (jobId, startTime, endTime) =>
-              s"""
-                  |{
-                  |  'start': new Date(${startTime}),
-                  |  'end': new Date(${endTime}),
-                  |  'content': 'Job ID=${jobId}'
-                  |},
-                """.stripMargin
-          }
-          }
-          ]);
-          {
-          """
-            |var options = {
-            |  editable: false
-            |}
-          """.stripMargin
-          }
-
-          var container = document.getElementById('application-timeline');
-          timeline = new vis.Timeline(container, data, options);
-
-*/
+function setupZoomable(id, timeline) {
+  $(id).click(function() {
+    if (this.checked) {
+      timeline.setOptions({zoomable: false});
+    } else {
+      timeline.setOptions({zoomable: true});
+    }
+  })
+}

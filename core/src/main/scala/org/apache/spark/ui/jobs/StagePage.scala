@@ -440,12 +440,15 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
         val taskInfo = taskUIData.taskInfo
         val taskAttemptId = taskInfo.attempt
         val isFailed = taskInfo.failed
+        val isRunning = taskInfo.running
         val metricsOpt = taskUIData.taskMetrics
         val executorId = taskUIData.taskInfo.executorId
         val host = taskUIData.taskInfo.host
         val launchTime = taskInfo.launchTime
-        val finishTime = taskInfo.finishTime
-        val totalExecutionTime = finishTime - launchTime
+        val currentTime = System.currentTimeMillis()
+        val finishTime = if (!isRunning) taskInfo.finishTime else currentTime
+        val totalExecutionTime =
+          if (!isRunning) finishTime - launchTime else currentTime - launchTime
 
         val shuffleReadTime =
           metricsOpt.flatMap(_.shuffleReadMetrics.map(_.fetchWaitTime)).getOrElse(0L).toDouble
