@@ -20,7 +20,7 @@ package org.apache.spark.ui.jobs
 import java.util.Date
 import javax.servlet.http.HttpServletRequest
 
-import scala.collection.mutable.{HashMap, ListBuffer}
+import scala.collection.mutable.{HashMap, HashSet, ListBuffer}
 import scala.xml.{Elem, Node, Unparsed}
 
 import org.apache.commons.lang3.StringEscapeUtils
@@ -30,6 +30,7 @@ import org.apache.spark.ui.{ToolTips, WebUIPage, UIUtils}
 import org.apache.spark.ui.jobs.UIData._
 import org.apache.spark.util.{Utils, Distribution}
 import org.apache.spark.scheduler.{AccumulableInfo, TaskInfo}
+import scala.collection.mutable
 
 /** Page showing statistics and task list for a given stage */
 private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
@@ -209,10 +210,12 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
 
       val unzipped = taskHeadersAndCssClasses.unzip
 
+      val currentTime = System.currentTimeMillis()
       val taskTable = UIUtils.listingTable(
         unzipped._1,
         taskRow(hasAccumulators, stageData.hasInput, stageData.hasOutput,
-          stageData.hasShuffleRead, stageData.hasShuffleWrite, stageData.hasBytesSpilled),
+          stageData.hasShuffleRead, stageData.hasShuffleWrite,
+          stageData.hasBytesSpilled, currentTime),
         tasks,
         headerClasses = unzipped._2)
       // Excludes tasks which failed and have incomplete metrics
@@ -479,49 +482,103 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
           serializationTimeProportion, gettingResultTimeProportion, schedulerDelayProportion))
       }
 
-      val groupArrayStr = executorsMap.map {
-        case ((executorId, host), _) =>
+      val executorsSet = new HashSet[(String, String)]
+
+      val executorsArrayStr = stageData.taskData.map {
+        case (_, taskUIData) =>
+          val taskInfo = taskUIData.taskInfo
+
+          val executorId = taskInfo.executorId
+          val host = taskInfo.host
+          executorsSet += ((executorId, host))
+
+          val taskId = taskInfo.taskId
+          val taskIdWithIndexAndAttempt = s"Task ${taskId}(${taskInfo.id})"
+
+          val isFailed = taskInfo.failed
+          val isRunning = taskInfo.running
+          val (classNameByStatus, titleByStatus) = {
+            if (isFailed) {
+              ("task failed", "Failed)")
+            } else if (isRunning) {
+              ("task running", "Running")
+            } else {
+              ("task succeeded", "Succeeded")
+            }
+          }
+
+          val launchTime = taskInfo.launchTime
+          val finishTime = if (!isRunning) taskInfo.finishTime else currentTime
+          val totalExecutionTime = finishTime - launchTime
+
+          val metricsOpt = taskUIData.taskMetrics
+          val shuffleReadTime =
+            metricsOpt.flatMap(_.shuffleReadMetrics.map(_.fetchWaitTime)).getOrElse(0L).toDouble
+          val shuffleReadTimeProportion =
+            (shuffleReadTime / totalExecutionTime * 100).toLong
+          val shuffleWriteTime =
+            metricsOpt.flatMap(_.shuffleWriteMetrics.map(_.shuffleWriteTime)).getOrElse(0L) / 1e6
+          val shuffleWriteTimeProportion =
+            (shuffleWriteTime / totalExecutionTime * 100).toLong
+          val executorRuntimeProportion =
+            ((metricsOpt.map(_.executorRunTime).getOrElse(0L) -
+              shuffleReadTime - shuffleWriteTime) / totalExecutionTime * 100).toLong
+          val serializationTimeProportion =
+            (metricsOpt.map(_.resultSerializationTime).getOrElse(0L).toDouble /
+              totalExecutionTime * 100).toLong
+          val deserializationTimeProportion =
+            (metricsOpt.map(_.executorDeserializeTime).getOrElse(0L).toDouble /
+              totalExecutionTime * 100).toLong
+          val gettingResultTimeProportion =
+            (getGettingResultTime(taskUIData.taskInfo).toDouble / totalExecutionTime * 100).toLong
+          val schedulerDelayProportion =
+            100 - executorRuntimeProportion - shuffleReadTimeProportion -
+              shuffleWriteTimeProportion - serializationTimeProportion -
+              deserializationTimeProportion - gettingResultTimeProportion
+
+          val schedulerDelayProportionPos = 0
+          val deserializationTimeProportionPos = schedulerDelayProportionPos + schedulerDelayProportion
+          val executorRuntimeProportionPos = deserializationTimeProportionPos + deserializationTimeProportion
+          val shuffleReadTimeProportionPos = executorRuntimeProportionPos + executorRuntimeProportion
+          val shuffleWriteTimeProportionPos = shuffleReadTimeProportionPos + shuffleReadTimeProportion
+          val serializationTimeProportionPos = shuffleWriteTimeProportionPos + shuffleWriteTimeProportion
+          val gettingResultTimeProportionPos = serializationTimeProportionPos + serializationTimeProportion
+
           s"""
              |{
-             |  'id': '${executorId}',
-             |  'content': '${executorId} / ${host}',
-             |  'value': '${executorId}'
+             |  'group': '${executorId}',
+             |  'content': '<div class="${classNameByStatus}" style="width: 100%; height: 50%;">' +
+             |    '${taskIdWithIndexAndAttempt}</div><svg style="width: 100%; height: 50%;">' +
+             |    '<rect x="${schedulerDelayProportionPos}%" y="0" width="${schedulerDelayProportion}%" y="0" height="100%" fill="#F6D76B"></rect>' +
+             |    '<rect x="${deserializationTimeProportionPos}%" y="0" width="${deserializationTimeProportion}%" height="100%" fill="#FFBDD8"></rect>' +
+             |    '<rect x="${executorRuntimeProportionPos}%" y="0" width="${executorRuntimeProportion}%" height="100%" fill="#D9EB52"></rect>' +
+             |    '<rect x="${shuffleReadTimeProportionPos}%" y="0" width="${shuffleReadTimeProportion}%" height="100%" fill="#8AC7DE"></rect>' +
+             |    '<rect x="${shuffleWriteTimeProportionPos}%" y="0" width="${shuffleWriteTimeProportion}%" height="100%" fill="#87796F"></rect>' +
+             |    '<rect x="${serializationTimeProportionPos}%" y="0" width="${serializationTimeProportion}%" height="100%" fill="#93DFB8"></rect>' +
+             |    '<rect x="${gettingResultTimeProportionPos}%" y="0" width="${gettingResultTimeProportion}%" height="100%" fill="#FF9036"></rect></svg>',
+             |  'start': new Date(${launchTime}),
+             |  'end': new Date(${finishTime}),
+             |  'title': '${taskIdWithIndexAndAttempt}\\nStatus: ${titleByStatus}\\n' +
+             |    'Launch Time: ${UIUtils.formatDate(new Date(launchTime))}\\n' +
+             |    '${if (!isRunning) {
+                       s"""Finish Time: ${UIUtils.formatDate(new Date(finishTime))}"""
+                     } else {
+                       ""
+                     }
+                   }' +
              |}
            """.stripMargin
       }.mkString("[", ",", "]")
 
-      val executorsArrayStr = executorsMap.flatMap {
-        case ((executorId, _), list) =>
-          list.map {
-            case (taskId, isFailed, launchTime, finishTime, deserializationTimeProportion, executorRuntimeProportion,
-              shuffleReadTimeProportion, shuffleWriteTimeProportion, serializationTimeProportion,
-              gettingResultTimeProportion, schedulerDeleyProportion) =>
-
-              val schedulerDelayProportionPos = 0
-              val deserializationTimeProportionPos = schedulerDelayProportionPos + schedulerDeleyProportion
-              val executorRuntimeProportionPos = deserializationTimeProportionPos + deserializationTimeProportion
-              val shuffleReadTimeProportionPos = executorRuntimeProportionPos + executorRuntimeProportion
-              val shuffleWriteTimeProportionPos = shuffleReadTimeProportionPos + shuffleReadTimeProportion
-              val serializationTimeProportionPos = shuffleWriteTimeProportionPos + shuffleWriteTimeProportion
-              val gettingResultTimeProportionPos = serializationTimeProportionPos + serializationTimeProportion
-
-              s"""
-                 |{
-                 |  'group': '${executorId}',
-                 |  'content': '<div ${if (isFailed) """class="failed-task"""" else ""} style="width: 100%; height: 50%;">Task ${taskId}</div><svg style="width: 100%; height: 50%;">' +
-                 |             '<rect x="${schedulerDelayProportionPos}%" y="0" width="${schedulerDeleyProportion}%" y="0" height="100%" fill="#F6D76B"></rect>' +
-                 |             '<rect x="${deserializationTimeProportionPos}%" y="0" width="${deserializationTimeProportion}%" height="100%" fill="#FFBDD8"></rect>' +
-                 |             '<rect x="${executorRuntimeProportionPos}%" y="0" width="${executorRuntimeProportion}%" height="100%" fill="#D9EB52"></rect>' +
-                 |             '<rect x="${shuffleReadTimeProportionPos}%" y="0" width="${shuffleReadTimeProportion}%" height="100%" fill="#8AC7DE"></rect>' +
-                 |             '<rect x="${shuffleWriteTimeProportionPos}%" y="0" width="${shuffleWriteTimeProportion}%" height="100%" fill="#87796F"></rect>' +
-                 |             '<rect x="${serializationTimeProportionPos}%" y="0" width="${serializationTimeProportion}%" height="100%" fill="#93DFB8"></rect>' +
-                 |             '<rect x="${gettingResultTimeProportionPos}%" y="0" width="${gettingResultTimeProportion}%" height="100%" fill="#FF9036"></rect></svg>',
-                 |  'start': new Date(${launchTime}),
-                 |  'end': new Date(${finishTime}),
-                 |  'title': "Task ${taskId}(${if (isFailed) "Failed" else "Succeeded"})"
-                 |}
-               """.stripMargin
-          }
+      val groupArrayStr = executorsSet.map {
+        case (executorId, host) =>
+          s"""
+            |{
+            |  'id': '${executorId}',
+            |  'content': '${executorId} / ${host}',
+            |  'value': '${executorId}'
+            |}
+          """.stripMargin
       }.mkString("[", ",", "]")
 
       val content =
@@ -574,9 +631,10 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
       hasOutput: Boolean,
       hasShuffleRead: Boolean,
       hasShuffleWrite: Boolean,
-      hasBytesSpilled: Boolean)(taskData: TaskUIData): Seq[Node] = {
+      hasBytesSpilled: Boolean,
+      currentTime: Long)(taskData: TaskUIData): Seq[Node] = {
     taskData match { case TaskUIData(info, metrics, errorMessage) =>
-      val duration = if (info.status == "RUNNING") info.timeRunning(System.currentTimeMillis())
+      val duration = if (info.status == "RUNNING") info.timeRunning(currentTime)
         else metrics.map(_.executorRunTime).getOrElse(1L)
       val formatDuration = if (info.status == "RUNNING") UIUtils.formatDuration(duration)
         else metrics.map(m => UIUtils.formatDuration(m.executorRunTime)).getOrElse("")
