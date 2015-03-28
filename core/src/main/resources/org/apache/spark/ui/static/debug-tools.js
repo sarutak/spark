@@ -84,7 +84,9 @@ function drawTaskAssignmentTimeline(groupArray, eventObjArray) {
     elem.setAttribute("rx", "2px");
     elem.setAttribute("stroke", "#97B0F8");
 
-    var fillColor
+    var fillColor;
+    var x;
+
 
     /**
      * JQuery doesn't support hasClass method for SVG
@@ -92,19 +94,23 @@ function drawTaskAssignmentTimeline(groupArray, eventObjArray) {
      */
     var classInElem = elem.getAttribute("class");
     if (classInElem.indexOf(" succeeded") >= 0) {
-      fillColor = "#D5DDF6"
+      fillColor = "#D5DDF6";
+      x = "5px";
     } else if (classInElem.indexOf(" failed") >= 0) {
-      fillColor = "#FF5475"
+      fillColor = "#FF5475";
+      x = "215px";
     } else {
-      fillColor = "#E3AAD6"
+      fillColor = "#E3AAD6";
+      x = "425px";
     }
     elem.setAttribute("fill", fillColor);
+    elem.setAttribute("x", x);
     elem.setAttribute("width", "20px");
     elem.setAttribute("height", "15px");
     elem.setAttribute("y", "5px");
   });
 
-  $("rect.task-status-legend")
+
 }
 
 function setupZoomable(id, timeline) {

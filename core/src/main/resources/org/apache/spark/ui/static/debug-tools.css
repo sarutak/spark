@@ -30,7 +30,13 @@ div#task-assignment-timeline-legend {
 
 #task-assignment-timeline-legend>div.control-panel {
   float: left;
+}
 
+#task-assignment-timeline-legend>svg.legend-area {
+  width: 600px;
+  height: 80px;
+  float: right;
+  border: 1px solid #000000;
 }
 
 #task-assignment-timeline div.item.range {

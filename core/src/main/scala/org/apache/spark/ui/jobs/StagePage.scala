@@ -562,17 +562,17 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
 
   def taskAssignmentTimelineLegend: Seq[Node] = {
 
-    <div id="task-assignment-timeline-legend" style="width: 700px; float: right;">
-      <div class="control-panel" style="float: left;">
+    <div id="task-assignment-timeline-legend">
+      <div class="control-panel">
         <input id="task-timeline-zoom-lock" type="checkbox" checked="checked"></input>
         Zoom Lock
       </div>
-      <svg style="width: 600px; height: 80px; float: right; border: 1px solid #000000;">
-        <rect class="task-status-legend succeeded" x="5px"></rect>
+      <svg class="legend-area">
+        <rect class="task-status-legend succeeded"></rect>
         <text x="35px" y="17px">Succeeded Task</text>
-        <rect class="task-status-legend failed" x="215px"></rect>
+        <rect class="task-status-legend failed"></rect>
         <text x="245px" y="17px">Failed Task</text>
-        <rect class="task-status-legend running" x="425px"></rect>
+        <rect class="task-status-legend running"></rect>
         <text x="455px" y="17px">Running Task</text>
         {
         val legendPairs = List(("#FFBDD8", "Task Deserialization Time"),
