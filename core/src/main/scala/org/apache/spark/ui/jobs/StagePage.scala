@@ -435,53 +435,6 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
       val maybeAccumulableTable: Seq[Node] =
         if (accumulables.size > 0) { <h4>Accumulators</h4> ++ accumulableTable } else Seq()
 
-      val executorsMap =
-        new HashMap[(String, String), ListBuffer[(String, Boolean, Long, Long, Long, Long, Long, Long, Long, Long, Long)]]
-      stageData.taskData.foreach { kv =>
-        val taskId = kv._1
-        val taskUIData = kv._2
-        val taskInfo = taskUIData.taskInfo
-        val taskAttemptId = taskInfo.attempt
-        val isFailed = taskInfo.failed
-        val isRunning = taskInfo.running
-        val metricsOpt = taskUIData.taskMetrics
-        val executorId = taskUIData.taskInfo.executorId
-        val host = taskUIData.taskInfo.host
-        val launchTime = taskInfo.launchTime
-        val currentTime = System.currentTimeMillis()
-        val finishTime = if (!isRunning) taskInfo.finishTime else currentTime
-        val totalExecutionTime =
-          if (!isRunning) finishTime - launchTime else currentTime - launchTime
-
-        val shuffleReadTime =
-          metricsOpt.flatMap(_.shuffleReadMetrics.map(_.fetchWaitTime)).getOrElse(0L).toDouble
-        val shuffleReadTimeProportion =
-          (shuffleReadTime / totalExecutionTime * 100).toLong
-        val shuffleWriteTime =
-          metricsOpt.flatMap(_.shuffleWriteMetrics.map(_.shuffleWriteTime)).getOrElse(0L) / 1e6
-        val shuffleWriteTimeProportion =
-          (shuffleWriteTime / totalExecutionTime * 100).toLong
-        val executorRuntimeProportion =
-          ((metricsOpt.map(_.executorRunTime).getOrElse(0L) - shuffleReadTime - shuffleWriteTime) /
-            totalExecutionTime * 100).toLong
-        val serializationTimeProportion =
-          (metricsOpt.map(_.resultSerializationTime).getOrElse(0L).toDouble / totalExecutionTime * 100).toLong
-        val deserializationTimeProportion =
-          (metricsOpt.map(_.executorDeserializeTime).getOrElse(0L).toDouble / totalExecutionTime * 100).toLong
-        val gettingResultTimeProportion =
-          (getGettingResultTime(taskUIData.taskInfo).toDouble / totalExecutionTime * 100).toLong
-        val schedulerDelayProportion =
-          100 - executorRuntimeProportion - shuffleReadTimeProportion -
-            shuffleWriteTimeProportion - serializationTimeProportion -
-            deserializationTimeProportion - gettingResultTimeProportion
-
-        executorsMap.getOrElseUpdate((executorId, host),
-          new ListBuffer[(String, Boolean, Long, Long, Long, Long, Long, Long, Long, Long, Long)])
-          .append((taskId + "." + taskAttemptId, isFailed, launchTime, finishTime, deserializationTimeProportion,
-            executorRuntimeProportion, shuffleReadTimeProportion, shuffleWriteTimeProportion,
-          serializationTimeProportion, gettingResultTimeProportion, schedulerDelayProportion))
-      }
-
       val executorsSet = new HashSet[(String, String)]
 
       val executorsArrayStr = stageData.taskData.map {
@@ -497,15 +450,8 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
 
           val isFailed = taskInfo.failed
           val isRunning = taskInfo.running
-          val (classNameByStatus, titleByStatus) = {
-            if (isFailed) {
-              ("task failed", "Failed)")
-            } else if (isRunning) {
-              ("task running", "Running")
-            } else {
-              ("task succeeded", "Succeeded")
-            }
-          }
+          val classNameByStatus =
+            if (isFailed) "failed" else if (isRunning) "running" else "succeeded"
 
           val launchTime = taskInfo.launchTime
           val finishTime = if (!isRunning) taskInfo.finishTime else currentTime
@@ -537,35 +483,49 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
               deserializationTimeProportion - gettingResultTimeProportion
 
           val schedulerDelayProportionPos = 0
-          val deserializationTimeProportionPos = schedulerDelayProportionPos + schedulerDelayProportion
-          val executorRuntimeProportionPos = deserializationTimeProportionPos + deserializationTimeProportion
-          val shuffleReadTimeProportionPos = executorRuntimeProportionPos + executorRuntimeProportion
-          val shuffleWriteTimeProportionPos = shuffleReadTimeProportionPos + shuffleReadTimeProportion
-          val serializationTimeProportionPos = shuffleWriteTimeProportionPos + shuffleWriteTimeProportion
-          val gettingResultTimeProportionPos = serializationTimeProportionPos + serializationTimeProportion
+          val deserializationTimeProportionPos =
+            schedulerDelayProportionPos + schedulerDelayProportion
+          val shuffleReadTimeProportionPos =
+            deserializationTimeProportionPos + deserializationTimeProportion
+          val executorRuntimeProportionPos =
+            shuffleReadTimeProportionPos + shuffleReadTimeProportion
+          val shuffleWriteTimeProportionPos =
+            executorRuntimeProportionPos + executorRuntimeProportion
+          val serializationTimeProportionPos =
+            shuffleWriteTimeProportionPos + shuffleWriteTimeProportion
+          val gettingResultTimeProportionPos =
+            serializationTimeProportionPos + serializationTimeProportion
 
           s"""
              |{
              |  'group': '${executorId}',
-             |  'content': '<div class="${classNameByStatus}" style="width: 100%; height: 50%;">' +
-             |    '${taskIdWithIndexAndAttempt}</div><svg style="width: 100%; height: 50%;">' +
-             |    '<rect x="${schedulerDelayProportionPos}%" y="0" width="${schedulerDelayProportion}%" y="0" height="100%" fill="#F6D76B"></rect>' +
-             |    '<rect x="${deserializationTimeProportionPos}%" y="0" width="${deserializationTimeProportion}%" height="100%" fill="#FFBDD8"></rect>' +
-             |    '<rect x="${executorRuntimeProportionPos}%" y="0" width="${executorRuntimeProportion}%" height="100%" fill="#D9EB52"></rect>' +
-             |    '<rect x="${shuffleReadTimeProportionPos}%" y="0" width="${shuffleReadTimeProportion}%" height="100%" fill="#8AC7DE"></rect>' +
-             |    '<rect x="${shuffleWriteTimeProportionPos}%" y="0" width="${shuffleWriteTimeProportion}%" height="100%" fill="#87796F"></rect>' +
-             |    '<rect x="${serializationTimeProportionPos}%" y="0" width="${serializationTimeProportion}%" height="100%" fill="#93DFB8"></rect>' +
-             |    '<rect x="${gettingResultTimeProportionPos}%" y="0" width="${gettingResultTimeProportion}%" height="100%" fill="#FF9036"></rect></svg>',
+             |  'content': '<div class="task-assignment-timeline-content ${classNameByStatus}">' +
+             |    '${taskIdWithIndexAndAttempt}</div>' +
+             |    '<svg class="task-assignment-timeline-duration-bar">' +
+             |    '<rect x="${schedulerDelayProportionPos}%"' +
+             |      'width="${schedulerDelayProportion}%" fill="#F6D76B"></rect>' +
+             |    '<rect x="${deserializationTimeProportionPos}%"' +
+             |      'width="${deserializationTimeProportion}%" fill="#FFBDD8"></rect>' +
+             |    '<rect x="${shuffleReadTimeProportionPos}%"' +
+             |      'width="${shuffleReadTimeProportion}%" fill="#8AC7DE"></rect>' +
+             |    '<rect x="${executorRuntimeProportionPos}%"' +
+             |      'width="${executorRuntimeProportion}%" fill="#D9EB52"></rect>' +
+             |    '<rect x="${shuffleWriteTimeProportionPos}%"' +
+             |      'width="${shuffleWriteTimeProportion}%" fill="#87796F"></rect>' +
+             |    '<rect x="${serializationTimeProportionPos}%"' +
+             |      'width="${serializationTimeProportion}%" fill="#93DFB8"></rect>' +
+             |    '<rect x="${gettingResultTimeProportionPos}%"' +
+             |      'width="${gettingResultTimeProportion}%" fill="#FF9036"></rect></svg>',
              |  'start': new Date(${launchTime}),
              |  'end': new Date(${finishTime}),
-             |  'title': '${taskIdWithIndexAndAttempt}\\nStatus: ${titleByStatus}\\n' +
-             |    'Launch Time: ${UIUtils.formatDate(new Date(launchTime))}\\n' +
+             |  'title': '${taskIdWithIndexAndAttempt}\\nStatus: ${taskInfo.status}\\n' +
+             |    'Launch Time: ${UIUtils.formatDate(new Date(launchTime))}' +
              |    '${if (!isRunning) {
-                       s"""Finish Time: ${UIUtils.formatDate(new Date(finishTime))}"""
+                       s"""\\nFinish Time: ${UIUtils.formatDate(new Date(finishTime))}"""
                      } else {
                        ""
                      }
-                   }' +
+                   }'
              |}
            """.stripMargin
       }.mkString("[", ",", "]")
@@ -602,22 +562,28 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
 
   def taskAssignmentTimelineLegend: Seq[Node] = {
 
-    <div style="width: 700px; float: right;">
-      <div style="float: left;"><input id="task-timeline-zoom-lock" type="checkbox" checked="checked"></input>Zoom Lock</div>
+    <div id="task-assignment-timeline-legend" style="width: 700px; float: right;">
+      <div class="control-panel" style="float: left;">
+        <input id="task-timeline-zoom-lock" type="checkbox" checked="checked"></input>
+        Zoom Lock
+      </div>
       <svg style="width: 600px; height: 80px; float: right; border: 1px solid #000000;">
-        <rect x="5px" y="5px" width="20px" height="15px" fill="#D5DDF6" stroke="#97B0F8" rx="1" ry="1"></rect>
+        <rect class="task-status-legend succeeded" x="5px"></rect>
         <text x="35px" y="17px">Succeeded Task</text>
-        <rect x="215px" y="5px" width="20px" height="15px" fill="#FF5475" stroke="#97B0F8" rx="1" ry="1"></rect>
+        <rect class="task-status-legend failed" x="215px"></rect>
         <text x="245px" y="17px">Failed Task</text>
+        <rect class="task-status-legend running" x="425px"></rect>
+        <text x="455px" y="17px">Running Task</text>
         {
         val legendPairs = List(("#FFBDD8", "Task Deserialization Time"),
-          ("#D9EB52", "Executor Computing Time"), ("#8AC7DE", "Shuffle Read Time"),
+          ("#8AC7DE", "Shuffle Read Time"), ("#D9EB52", "Executor Computing Time"),
           ("#87796F", "Shuffle Write Time"), ("#93DFB8", "Result Serialization TIme"),
           ("#FF9036", "Getting Result Time"), ("#F6D76B", "Scheduler Delay"))
 
+
         legendPairs.zipWithIndex.map {
           case ((color, name), index) =>
-            <rect x={5 + (index / 3) * 210 + "px"} y={35 + (index % 3) * 15 + "px"} width="10px" height="10px" fill={color}></rect>
+            <rect class="task-duration-legend" x={5 + (index / 3) * 210 + "px"} y={35 + (index % 3) * 15 + "px"} width="10px" height="10px" fill={color}></rect>
               <text x={25 + (index / 3) * 210 + "px"} y={45 + (index % 3) * 15 + "px"}>{name}</text>
         }
         }

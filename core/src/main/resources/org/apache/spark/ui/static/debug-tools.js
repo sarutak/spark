@@ -52,7 +52,6 @@ function drawJobTimeline(eventObjArray) {
   var timeline = new vis.Timeline(container, visDataSet, options);
 }
 
-//var taskTimeline
 function drawTaskAssignmentTimeline(groupArray, eventObjArray) {
   var groups = new vis.DataSet(groupArray);
   var items = new vis.DataSet(eventObjArray);
@@ -73,24 +72,39 @@ function drawTaskAssignmentTimeline(groupArray, eventObjArray) {
   taskTimeline.setOptions(options);
   taskTimeline.setGroups(groups);
   taskTimeline.setItems(items);
-/*
-  $("#task-timeline-zoom-lock").click(function() {
-    if (this.checked) {
-      taskTimeline.setOptions({zoomable: false})
-    } else {
-      taskTimeline.setOptions({zoomable: true})
-    }
-  })
-*/
+
   setupZoomable("#task-timeline-zoom-lock", taskTimeline)
 
-  $("div.item.range").map(function(idx, elem) {
-    return elem.setAttribute("style", elem.getAttribute("style") + " padding: 0px 0px 0px 0px; height: 40px;");
+  $.each($(".task-assignment-timeline-duration-bar>rect"), function(idx, elem) {
+    elem.setAttribute("height", "100%");
+    elem.setAttribute("y", "0");
+  })
+
+  $.each($("rect.task-status-legend"), function(idx, elem) {
+    elem.setAttribute("rx", "2px");
+    elem.setAttribute("stroke", "#97B0F8");
+
+    var fillColor
+
+    /**
+     * JQuery doesn't support hasClass method for SVG
+     * so we should use getAttribute for now.
+     */
+    var classInElem = elem.getAttribute("class");
+    if (classInElem.indexOf(" succeeded") >= 0) {
+      fillColor = "#D5DDF6"
+    } else if (classInElem.indexOf(" failed") >= 0) {
+      fillColor = "#FF5475"
+    } else {
+      fillColor = "#E3AAD6"
+    }
+    elem.setAttribute("fill", fillColor);
+    elem.setAttribute("width", "20px");
+    elem.setAttribute("height", "15px");
+    elem.setAttribute("y", "5px");
   });
 
-  $("div.item.range>div").map(function(idx, elem) {
-    return elem.setAttribute("style", elem.getAttribute("style") + " height: 100%; width: 100%;");
-  });
+  $("rect.task-status-legend")
 }
 
 function setupZoomable(id, timeline) {
