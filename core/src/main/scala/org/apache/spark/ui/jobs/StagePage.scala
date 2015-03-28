@@ -502,19 +502,19 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
              |  'content': '<div class="task-assignment-timeline-content ${classNameByStatus}">' +
              |    '${taskIdWithIndexAndAttempt}</div>' +
              |    '<svg class="task-assignment-timeline-duration-bar">' +
-             |    '<rect x="${schedulerDelayProportionPos}%"' +
+             |    '<rect x="${schedulerDelayProportionPos}%" y="0" height="100%"' +
              |      'width="${schedulerDelayProportion}%" fill="#F6D76B"></rect>' +
-             |    '<rect x="${deserializationTimeProportionPos}%"' +
+             |    '<rect x="${deserializationTimeProportionPos}%" y="0" height="100%"' +
              |      'width="${deserializationTimeProportion}%" fill="#FFBDD8"></rect>' +
-             |    '<rect x="${shuffleReadTimeProportionPos}%"' +
+             |    '<rect x="${shuffleReadTimeProportionPos}%" y="0" height="100%"' +
              |      'width="${shuffleReadTimeProportion}%" fill="#8AC7DE"></rect>' +
-             |    '<rect x="${executorRuntimeProportionPos}%"' +
+             |    '<rect x="${executorRuntimeProportionPos}%" y="0" height="100%"' +
              |      'width="${executorRuntimeProportion}%" fill="#D9EB52"></rect>' +
-             |    '<rect x="${shuffleWriteTimeProportionPos}%"' +
+             |    '<rect x="${shuffleWriteTimeProportionPos}%" y="0" height="100%"' +
              |      'width="${shuffleWriteTimeProportion}%" fill="#87796F"></rect>' +
-             |    '<rect x="${serializationTimeProportionPos}%"' +
+             |    '<rect x="${serializationTimeProportionPos}%" y="0" height="100%"' +
              |      'width="${serializationTimeProportion}%" fill="#93DFB8"></rect>' +
-             |    '<rect x="${gettingResultTimeProportionPos}%"' +
+             |    '<rect x="${gettingResultTimeProportionPos}%" y="0" height="100%"' +
              |      'width="${gettingResultTimeProportion}%" fill="#FF9036"></rect></svg>',
              |  'start': new Date(${launchTime}),
              |  'end': new Date(${finishTime}),
@@ -568,24 +568,28 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
         Zoom Lock
       </div>
       <svg class="legend-area">
-        <rect class="task-status-legend succeeded"></rect>
+        <rect x="5px" y="5px" width="20px"
+          height="15px" rx="2px" fill="#D5DDF6" stroke="#97B0F8"></rect>
         <text x="35px" y="17px">Succeeded Task</text>
-        <rect class="task-status-legend failed"></rect>
+        <rect x="215px" y="5px" width="20px"
+          height="15px" rx="2px" fill="#FF5475" stroke="#97B0F8"></rect>
         <text x="245px" y="17px">Failed Task</text>
-        <rect class="task-status-legend running"></rect>
+        <rect x="425px" y="5px" width="20px"
+          height="15px" rx="2px" fill="#E3AAD6" stroke="#97B0F8"></rect>
         <text x="455px" y="17px">Running Task</text>
         {
-        val legendPairs = List(("#FFBDD8", "Task Deserialization Time"),
-          ("#8AC7DE", "Shuffle Read Time"), ("#D9EB52", "Executor Computing Time"),
-          ("#87796F", "Shuffle Write Time"), ("#93DFB8", "Result Serialization TIme"),
-          ("#FF9036", "Getting Result Time"), ("#F6D76B", "Scheduler Delay"))
+          val legendPairs = List(("#FFBDD8", "Task Deserialization Time"),
+            ("#8AC7DE", "Shuffle Read Time"), ("#D9EB52", "Executor Computing Time"),
+            ("#87796F", "Shuffle Write Time"), ("#93DFB8", "Result Serialization TIme"),
+            ("#FF9036", "Getting Result Time"), ("#F6D76B", "Scheduler Delay"))
 
-
-        legendPairs.zipWithIndex.map {
-          case ((color, name), index) =>
-            <rect class="task-duration-legend" x={5 + (index / 3) * 210 + "px"} y={35 + (index % 3) * 15 + "px"} width="10px" height="10px" fill={color}></rect>
-              <text x={25 + (index / 3) * 210 + "px"} y={45 + (index % 3) * 15 + "px"}>{name}</text>
-        }
+          legendPairs.zipWithIndex.map {
+            case ((color, name), index) =>
+              <rect x={5 + (index / 3) * 210 + "px"} y={35 + (index % 3) * 15 + "px"}
+                width="10px" height="10px" fill={color}></rect>
+              <text x={25 + (index / 3) * 210 + "px"}
+                y={45 + (index % 3) * 15 + "px"}>{name}</text>
+          }
         }
       </svg>
     </div>
