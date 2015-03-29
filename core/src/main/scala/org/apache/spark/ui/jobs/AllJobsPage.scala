@@ -23,6 +23,7 @@ import javax.servlet.http.HttpServletRequest
 
 import org.apache.spark.ui.{WebUIPage, UIUtils}
 import org.apache.spark.ui.jobs.UIData.JobUIData
+import org.apache.spark.JobExecutionStatus
 
 /** Page showing list of all ongoing and recently finished jobs */
 private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
@@ -160,24 +161,65 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
           |[
           |  {
           |    'id': 'executors',
-          |    'content': 'Executors',
-          |    'value': 'executors'
+          |    'content': '<div>Executors</div>',
           |  },
           |  {
           |    'id': 'jobs',
-          |    'content': 'Jobs',
-          |    'value': 'jobs'
+          |    'content': '<div>Jobs</div>',
           |  }
           |]
         """.stripMargin
 
 
+      val jobEventArray = (completedJobs ++ failedJobs ++ activeJobs).flatMap { jobUIData =>
+        val jobId = jobUIData.jobId
+        val status = jobUIData.status
+        val submissionTimeOpt = jobUIData.submissionTime
+        val completionTimeOpt = jobUIData.completionTime
+
+        if (status == JobExecutionStatus.UNKNOWN || submissionTimeOpt.isEmpty ||
+          completionTimeOpt.isEmpty && status != JobExecutionStatus.RUNNING) {
+          None
+        }
+
+        val submissionTime = submissionTimeOpt.get
+        val completionTime = completionTimeOpt.getOrElse(now)
+        val classNameByStatus = status match {
+          case JobExecutionStatus.SUCCEEDED => "succeeded"
+          case JobExecutionStatus.FAILED => "failed"
+          case JobExecutionStatus.RUNNING => "running"
+        }
+
+        val timelineObject =
+          s"""
+             |{
+             |  'group': 'jobs',
+             |  'start': new Date(${submissionTime}),
+             |  'end': new Date(${completionTime}),
+             |  'content': '<div class="application-timeline-content ${classNameByStatus}">' +
+             |    'Job ${jobId}</div>',
+             |  'title': 'Job ${jobId}\\nStatus: ${status}\\n' +
+             |  'Submission Time: ${submissionTime}' +
+             |  ${
+                  if (status != JobExecutionStatus.RUNNING) {
+                    s"""'\\nCompletion Time: ${completionTime}'"""
+                  } else {
+                    ""
+                  }
+                }
+             | }
+           """.stripMargin
+          Option(timelineObject)
+      }
+/*
       val jobEventArray = (listener.completedJobs.map { completedJobData =>
         (completedJobData.jobId, completedJobData.submissionTime.getOrElse(-1),
          completedJobData.completionTime.getOrElse(-1), true)
       } ++ listener.failedJobs.map { faildJobData =>
         (faildJobData.jobId, faildJobData.submissionTime.getOrElse(-1),
          faildJobData.completionTime.getOrElse(-1), false)
+      } ++ listener.activeJobs.map { activeJobData =>
+
       }).map {
         case (jobId, submissionTime, completionTime, succeeded) =>
           s"""
@@ -190,6 +232,7 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
             |}
           """.stripMargin
       }
+*/
 
       val executorAddedEventArray = listener.executorIdToAddedTime.map {
         case (executorId, addedTime) =>

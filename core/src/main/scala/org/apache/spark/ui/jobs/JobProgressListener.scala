@@ -175,26 +175,28 @@ class JobProgressListener(conf: SparkConf) extends SparkListener with Logging {
   }
 
   /** If ExecutorAddedEvents is too large, remove and garbage collect old events */
-  private def trimExecutorAddedEventsIfNecessary(events: TreeSet[(Long, ExecutorId)]) = synchronized {
-    if (events.size > retainedExecutorAddedEvents) {
-      val toRemove = math.max(retainedExecutorAddedEvents / 10, 1)
-      events.take(toRemove).foreach { event =>
-        addedExecutors.remove(event)
-        executorIdToAddedTime.remove(event._2)
+  private def trimExecutorAddedEventsIfNecessary(events: TreeSet[(Long, ExecutorId)]) =
+    synchronized {
+      if (events.size > retainedExecutorAddedEvents) {
+        val toRemove = math.max(retainedExecutorAddedEvents / 10, 1)
+        events.take(toRemove).foreach { event =>
+          addedExecutors.remove(event)
+          executorIdToAddedTime.remove(event._2)
+        }
       }
     }
-  }
 
   /** If ExecutorRemovedEvents is too large, remove and garbage collect old events */
-  private def trimExecutorRemovedEventsIfNecessary(events: TreeSet[(Long, ExecutorId)]) = synchronized {
-    if (events.size > retainedExecutorRemovedEvents) {
-      val toRemove = math.max(retainedExecutorRemovedEvents / 10, 1)
-      events.take(toRemove).foreach { event =>
-        removedExecutors.remove(event)
-        executorIdToRemovedTimeAndReason.remove(event._2)
+  private def trimExecutorRemovedEventsIfNecessary(events: TreeSet[(Long, ExecutorId)]) =
+    synchronized {
+      if (events.size > retainedExecutorRemovedEvents) {
+        val toRemove = math.max(retainedExecutorRemovedEvents / 10, 1)
+        events.take(toRemove).foreach { event =>
+          removedExecutors.remove(event)
+          executorIdToRemovedTimeAndReason.remove(event._2)
+        }
       }
     }
-  }
 
   override def onJobStart(jobStart: SparkListenerJobStart): Unit = synchronized {
     val jobGroup = for (
@@ -563,6 +565,7 @@ class JobProgressListener(conf: SparkConf) extends SparkListener with Logging {
       val executorId = executorRemoved.executorId
       removedExecutors += ((executorRemoved.time, executorId))
       executorIdToRemovedTimeAndReason(executorId) = (executorRemoved.time, executorRemoved.reason)
+      trimExecutorRemovedEventsIfNecessary(removedExecutors)
     }
   }
 }
