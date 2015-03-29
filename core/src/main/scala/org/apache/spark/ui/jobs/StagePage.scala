@@ -507,9 +507,10 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
             val timelineObject =
               s"""
                  |{
+                 |  'className': 'task task-assignment-timeline-object ${classNameByStatus}',
                  |  'group': '${executorId}',
-                 |  'content': '<div class="task-assignment-timeline-content ' +
-                 |    '${classNameByStatus}">${taskIdWithIndexAndAttempt}</div>' +
+                 |  'content': '<div class="task-assignment-timeline-content">' +
+                 |    '${taskIdWithIndexAndAttempt}</div>' +
                  |    '<svg class="task-assignment-timeline-duration-bar">' +
                  |    '<rect x="${schedulerDelayProportionPos}%" y="0" height="100%"' +
                  |      'width="${schedulerDelayProportion}%" fill="#F6D76B"></rect>' +
@@ -562,9 +563,12 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
         <h4>Aggregated Metrics by Executor</h4> ++ executorTable.toNodeSeq ++
         maybeAccumulableTable ++
         <h4>Tasks</h4> ++ taskTable ++
-        <h4 style="float: left;">Task Assignment Timeline</h4> ++
-          taskAssignmentTimelineLegend ++
-        <div id="task-assignment-timeline" style="clear: both;"></div> ++
+        <h4>Task Assignment Timeline</h4> ++
+        <div id="task-assignment-timeline">
+          <div class="timeline-header">
+            {taskAssignmentTimelineControlPanel ++ taskAssignmentTimelineLegend}
+          </div>
+        </div> ++
         <script type="text/javascript">
           {Unparsed(s"drawTaskAssignmentTimeline(${groupArrayStr}, ${executorsArrayStr})")}
         </script>
@@ -573,14 +577,18 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
     }
   }
 
-  def taskAssignmentTimelineLegend: Seq[Node] = {
-
-    <div id="task-assignment-timeline-legend">
-      <div class="control-panel">
-        <input id="task-timeline-zoom-lock" type="checkbox" checked="checked"></input>
-        Zoom Lock
+  private val taskAssignmentTimelineControlPanel: Seq[Node] = {
+    <div class="control-panel">
+      <div id="task-assignment-timeline-zoom-lock">
+        <input type="checkbox" checked="checked"></input>
+        <span>Zoom Lock</span>
       </div>
-      <svg class="legend-area">
+    </div>
+  }
+
+  private val taskAssignmentTimelineLegend: Seq[Node] = {
+    <div class="legend-area">
+      <svg>
         <rect x="5px" y="5px" width="20px"
           height="15px" rx="2px" fill="#D5DDF6" stroke="#97B0F8"></rect>
         <text x="35px" y="17px">Succeeded Task</text>
@@ -599,9 +607,9 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
           legendPairs.zipWithIndex.map {
             case ((color, name), index) =>
               <rect x={5 + (index / 3) * 210 + "px"} y={35 + (index % 3) * 15 + "px"}
-                width="10px" height="10px" fill={color}></rect>
-              <text x={25 + (index / 3) * 210 + "px"}
-                y={45 + (index % 3) * 15 + "px"}>{name}</text>
+                    width="10px" height="10px" fill={color}></rect>
+                <text x={25 + (index / 3) * 210 + "px"}
+                      y={45 + (index % 3) * 15 + "px"}>{name}</text>
           }
         }
       </svg>

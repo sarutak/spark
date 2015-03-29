@@ -95,6 +95,16 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
     </table>
   }
 
+  private val controlPanel : Seq[Node] = {
+    <div class="control-panel">
+      <div id="application-timeline-zoom-lock">
+        <input type="checkbox" checked="checked"></input>
+        <span>Zoom Lock</span>
+      </div>
+    </div>
+  }
+
+
   def render(request: HttpServletRequest): Seq[Node] = {
     listener.synchronized {
       val activeJobs = listener.activeJobs.values.toSeq
@@ -193,20 +203,21 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
         val timelineObject =
           s"""
              |{
+             |  'className': 'job application-timeline-object ${classNameByStatus}',
              |  'group': 'jobs',
              |  'start': new Date(${submissionTime}),
              |  'end': new Date(${completionTime}),
-             |  'content': '<div class="application-timeline-content ${classNameByStatus}">' +
+             |  'content': '<div class="application-timeline-content">' +
              |    'Job ${jobId}</div>',
              |  'title': 'Job ${jobId}\\nStatus: ${status}\\n' +
              |  'Submission Time: ${submissionTime}' +
-             |  ${
-                  if (status != JobExecutionStatus.RUNNING) {
-                    s"""'\\nCompletion Time: ${completionTime}'"""
-                  } else {
-                    ""
-                  }
-                }
+             |  '${
+                   if (status != JobExecutionStatus.RUNNING) {
+                     s"""\\nCompletion Time: ${completionTime}"""
+                   } else {
+                     ""
+                   }
+                 }'
              | }
            """.stripMargin
           Option(timelineObject)
@@ -239,7 +250,8 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
         (jobEventArray ++ executorAddedEventArray ++
           executorRemovedEventArray).mkString("[", ",", "]")
 
-      content ++= <h4>Events on Application Timeline</h4> ++ <div id="application-timeline"></div>
+      content ++= <h4>Events on Application Timeline</h4> ++ controlPanel ++
+        <div id="application-timeline"></div>
       content ++=
         <script type="text/javascript">
           {Unparsed(s"drawApplicationTimeline(${groupArrayStr}, ${eventArrayStr});")}

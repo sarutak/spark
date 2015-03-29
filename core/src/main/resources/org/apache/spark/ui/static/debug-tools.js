@@ -36,6 +36,8 @@ var groups = new vis.DataSet(groupArray);
   applicationTimeline.setOptions(options);
   applicationTimeline.setGroups(groups);
   applicationTimeline.setItems(items);
+
+  setupZoomable("#application-timeline-zoom-lock", applicationTimeline);
 }
 
 function drawJobTimeline(eventObjArray) {
@@ -73,15 +75,19 @@ function drawTaskAssignmentTimeline(groupArray, eventObjArray) {
   taskTimeline.setGroups(groups);
   taskTimeline.setItems(items);
 
-  setupZoomable('#task-timeline-zoom-lock', taskTimeline)
+  setupZoomable('#task-assignment-timeline-zoom-lock', taskTimeline);
 }
 
 function setupZoomable(id, timeline) {
-  $(id).click(function() {
+  $(id + '>input[type="checkbox"]').click(function() {
     if (this.checked) {
       timeline.setOptions({zoomable: false});
     } else {
       timeline.setOptions({zoomable: true});
     }
-  })
+  });
+
+  $(id + ">span").click(function() {
+    $(this).parent().find('input:checkbox').trigger('click');
+  });
 }
