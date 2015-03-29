@@ -211,28 +211,6 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
            """.stripMargin
           Option(timelineObject)
       }
-/*
-      val jobEventArray = (listener.completedJobs.map { completedJobData =>
-        (completedJobData.jobId, completedJobData.submissionTime.getOrElse(-1),
-         completedJobData.completionTime.getOrElse(-1), true)
-      } ++ listener.failedJobs.map { faildJobData =>
-        (faildJobData.jobId, faildJobData.submissionTime.getOrElse(-1),
-         faildJobData.completionTime.getOrElse(-1), false)
-      } ++ listener.activeJobs.map { activeJobData =>
-
-      }).map {
-        case (jobId, submissionTime, completionTime, succeeded) =>
-          s"""
-            |{
-            |  'group': 'jobs',
-            |  'start': new Date(${submissionTime}),
-            |  'end': new Date(${completionTime}),
-            |  'content': '<div class=${if (succeeded) "succeeded-job" else "failed-job"}>' +
-            |    'Job ${jobId}</div>'
-            |}
-          """.stripMargin
-      }
-*/
 
       val executorAddedEventArray = listener.executorIdToAddedTime.map {
         case (executorId, addedTime) =>
