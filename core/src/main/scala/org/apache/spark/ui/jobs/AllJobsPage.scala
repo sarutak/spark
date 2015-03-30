@@ -19,6 +19,7 @@ package org.apache.spark.ui.jobs
 
 import scala.xml.{Node, NodeSeq, Unparsed}
 
+import java.util.Date
 import javax.servlet.http.HttpServletRequest
 
 import org.apache.spark.ui.{WebUIPage, UIUtils}
@@ -237,7 +238,7 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
              |  'Submission Time: ${submissionTime}' +
              |  '${
                    if (status != JobExecutionStatus.RUNNING) {
-                     s"""\\nCompletion Time: ${completionTime}"""
+                     s"""\\nCompletion Time: ${UIUtils.formatDate(new Date(completionTime))}"""
                    } else {
                      ""
                    }
@@ -254,7 +255,8 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
             |  'className': 'executor application-tmeline-object added',
             |  'group': 'executors',
             |  'start': new Date(${addedTime}),
-            |  'content': '<div class="executor-added">Executor ${executorId} added</div>'
+            |  'content': '<div>Executor ${executorId} added</div>',
+            |  'title': 'Added at ${UIUtils.formatDate(new Date(addedTime))}'
             |}
           """.stripMargin
       }
@@ -266,8 +268,9 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
             |  'className': 'executor application-timeline-object removed',
             |  'group': 'executors',
             |  'start': new Date(${removedTime}),
-            |  'content': '<a data-toggle="tooltip" data-placement="auto"' +
-            |             ' title="${reason}">Executor ${executorId} removed</a>'
+            |  'content': '<div>Executor ${executorId} removed (${reason})</div>',
+            |  'title': 'Removed at ${UIUtils.formatDate(new Date(removedTime))}\\n' +
+            |    'Reason: ${reason}'
             |}
           """.stripMargin
       }
