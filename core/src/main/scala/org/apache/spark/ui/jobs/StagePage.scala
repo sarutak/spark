@@ -596,7 +596,7 @@ private[ui] class StagePage(parent: StagesTab) extends WebUIPage("stage") {
           height="15px" rx="2px" fill="#FF5475" stroke="#97B0F8"></rect>
         <text x="245px" y="17px">Failed Task</text>
         <rect x="425px" y="5px" width="20px"
-          height="15px" rx="2px" fill="#E3AAD6" stroke="#97B0F8"></rect>
+          height="15px" rx="2px" fill="#FDFFCA" stroke="#97B0F8"></rect>
         <text x="455px" y="17px">Running Task</text>
         {
           val legendPairs = List(("#FFBDD8", "Task Deserialization Time"),

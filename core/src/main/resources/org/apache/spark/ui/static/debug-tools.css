@@ -80,7 +80,7 @@ div#application-timeline, div#job-timeline {
 }
 
 .task.task-assignment-timeline-object.running {
-  background-color: #E3AAD6;
+  background-color: #FDFFCA;
 }
 
 .job.application-timeline-object.succeeded {
@@ -92,7 +92,15 @@ div#application-timeline, div#job-timeline {
 }
 
 .job.application-timeline-object.running {
-   background-color: #E3AAD6;
+   background-color: #FDFFCA;
+}
+
+.executor.application-timeline-object.added {
+  background-color: #D5DDF6;
+}
+
+.executor.application-timeline-object.removed {
+  background-color: #EBCA59;
 }
 
 
