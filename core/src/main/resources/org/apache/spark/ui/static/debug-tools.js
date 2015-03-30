@@ -24,7 +24,6 @@ var groups = new vis.DataSet(groupArray);
       return a.value - b.value
     },
     editable: false,
-    selectable: false,
     showCurrentTime: false,
     zoomable: false
   };
