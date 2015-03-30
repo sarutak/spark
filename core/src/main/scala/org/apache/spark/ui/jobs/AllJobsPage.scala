@@ -235,7 +235,7 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
              |  'content': '<div class="application-timeline-content">' +
              |    'Job ${jobId}</div>',
              |  'title': 'Job ${jobId}\\nStatus: ${status}\\n' +
-             |  'Submission Time: ${submissionTime}' +
+             |  'Submission Time: ${UIUtils.formatDate(new Date(submissionTime))}' +
              |  '${
                    if (status != JobExecutionStatus.RUNNING) {
                      s"""\\nCompletion Time: ${UIUtils.formatDate(new Date(completionTime))}"""
