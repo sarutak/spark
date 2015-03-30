@@ -87,12 +87,30 @@ div#application-timeline, div#job-timeline {
   background-color: #D5DDF6;
 }
 
+.job.application-timeline-object.succeeded.selected {
+   background-color: #D5DDF6;
+   border-color: #97B0F8;
+   z-index: auto;
+}
+
 .job.application-timeline-object.failed {
    background-color: #FF5475;
 }
 
+.job.application-timeline-object.failed.selected {
+   background-color: #FF5475;
+   border-color: #97B0F8;
+   z-index: auto;
+}
+
 .job.application-timeline-object.running {
    background-color: #FDFFCA;
+}
+
+.job.application-timeline-object.running.selected {
+   background-color: #FDFFCA;
+   border-color: #97B0F8;
+   z-index: auto;
 }
 
 .executor.application-timeline-object.added {

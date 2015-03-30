@@ -37,15 +37,6 @@ var groups = new vis.DataSet(groupArray);
   applicationTimeline.setItems(items);
 
   setupZoomable("#application-timeline-zoom-lock", applicationTimeline);
-
-  applicationTimeline.on("select", function(properties) {
-    alert(properties.nodes);
-  });
-
-  applicationTimeline.off("select", function(properties) {
-    alert(properties.nodes);
-  });
-
 }
 
 function drawJobTimeline(eventObjArray) {
