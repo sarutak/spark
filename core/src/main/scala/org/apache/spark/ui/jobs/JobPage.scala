@@ -188,7 +188,7 @@ private[ui] class JobPage(parent: JobsTab) extends WebUIPage("job") {
                |{
                |  'start': new Date(${submissionTime}),
                |  'end': new Date(${completionTime}),
-               |  'content': '<a data-toggle="tooltip" data-placement="auto" title="${failureReason.replaceAll("\n", "\\n")}">Stage ${stageId}</a>'
+               |  'content': '<span data-toggle="tooltip" data-placement="auto" data-html="true" title="${failureReason.replaceAll("\n", "<br/>")}">Stage ${stageId}</span>'
                |}
              """.stripMargin
       }
