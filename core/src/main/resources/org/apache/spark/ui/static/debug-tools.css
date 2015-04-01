@@ -83,6 +83,36 @@ div#application-timeline, div#job-timeline {
   background-color: #FDFFCA;
 }
 
+.stage.job-timeline-object.succeeded {
+  background-color: #D5DDF6;
+}
+
+.stage.job-timeline-object.succeeded.selected {
+   background-color: #D5DDF6;
+   border-color: #97B0F8;
+   z-index: auto;
+}
+
+.stage.job-timeline-object.failed {
+   background-color: #FF5475;
+}
+
+.stage.job-timeline-object.failed.selected {
+   background-color: #FF5475;
+   border-color: #97B0F8;
+   z-index: auto;
+}
+
+.stage.job-timeline-object.running {
+   background-color: #FDFFCA;
+}
+
+.stage.job-timeline-object.running.selected {
+   background-color: #FDFFCA;
+   border-color: #97B0F8;
+   z-index: auto;
+}
+
 .job.application-timeline-object.succeeded {
   background-color: #D5DDF6;
 }
