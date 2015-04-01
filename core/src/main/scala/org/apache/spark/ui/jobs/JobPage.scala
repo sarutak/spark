@@ -17,6 +17,8 @@
 
 package org.apache.spark.ui.jobs
 
+import java.util.Date
+
 import scala.collection.mutable
 import scala.xml.{NodeSeq, Node, Unparsed}
 
@@ -29,6 +31,40 @@ import org.apache.spark.ui.{UIUtils, WebUIPage}
 /** Page showing statistics and stage list for a given job */
 private[ui] class JobPage(parent: JobsTab) extends WebUIPage("job") {
   private val listener = parent.listener
+
+  private val controlPanel : Seq[Node] = {
+    <div class="control-panel">
+      <div id="job-timeline-zoom-lock">
+        <input type="checkbox" checked="checked"></input>
+        <span>Zoom Lock</span>
+      </div>
+    </div>
+  }
+
+  private val executorsLegend: Seq[Node] = {
+    <div class="legend-area"><svg width="200px" height="55px">
+      <rect x="5px" y="5px" width="20px" height="15px"
+            rx="2px" ry="2px" stroke="#97B0F8" fill="#D5DDF6"></rect>
+      <text x="35px" y="17px">Executor Added</text>
+      <rect x="5px" y="35px" width="20px" height="15px"
+            rx="2px" ry="2px" stroke="#97B0F8" fill="#EBCA59"></rect>
+      <text x="35px" y="47px">Executor Removed</text>
+    </svg></div>
+  }
+
+  private val stagesLegend: Seq[Node] = {
+    <div class="legend-area"><svg width="200px" height="85px">
+      <rect x="5px" y="5px" width="20px" height="15px"
+            rx="2px" ry="2px" stroke="#97B0F8" fill="#D5DDF6"></rect>
+      <text x="35px" y="17px">Completed Stage </text>
+      <rect x="5px" y="35px" width="20px" height="15px"
+            rx="2px" ry="2px" stroke="#97B0F8" fill="#FF5475"></rect>
+      <text x="35px" y="47px">Failed Stage</text>
+      <rect x="5px" y="65px" width="20px" height="15px"
+            rx="2px" ry="2px" stroke="#97B0F8" fill="#FDFFCA"></rect>
+      <text x="35px" y="77px">Active Stage</text>
+    </svg></div>
+  }
 
   def render(request: HttpServletRequest): Seq[Node] = {
     listener.synchronized {
@@ -154,54 +190,95 @@ private[ui] class JobPage(parent: JobsTab) extends WebUIPage("job") {
         </div>
       var content = summary
 
-      val activeStageList = activeStages.map { info =>
-        (info.stageId, info.submissionTime.getOrElse(-1L))
-      }.map {
-        case (stageId, submissionTime) =>
-          s"""
-               |{
-               |  'start': new Date(${submissionTime}),
-               |  'content': 'Stage ${stageId}'
-               |}
-             """.stripMargin
+      val groupArrayStr =
+        s"""
+          |[
+          |  {
+          |    'id': 'executors',
+          |    'content': '<div>Executors</div>${executorsLegend.toString().filter(_ != '\n')}',
+          |  },
+          |  {
+          |    'id': 'stages',
+          |    'content': '<div>Stages</div>${stagesLegend.toString().filter(_ != '\n')}',
+          |  }
+          |]
+        """.stripMargin
+
+      val stageEventArray = (activeStages ++ completedStages ++ failedStages).map { stage =>
+        val stageId = stage.stageId
+        val attemptId = stage.attemptId
+        val status = {
+          if (stage.completionTime.isDefined) {
+            if (stage.failureReason.isDefined) {
+              "failed"
+            } else {
+              "succeeded"
+            }
+          } else {
+            "running"
+          }
+        }
+
+        val submissionTime = stage.submissionTime.get
+        val completionTime = stage.completionTime.getOrElse(System.currentTimeMillis())
+
+        s"""
+           |{
+           |  'className': 'stage job-timeline-object ${status}',
+           |  'group': 'stages',
+           |  'start': new Date(${submissionTime}),
+           |  'end': new Date(${completionTime}),
+           |  'content': '<div class="job-timeline-content">' +
+           |    'Stage ${stageId}.${attemptId}</div>',
+           |  'title': 'Stage ${stageId}.${attemptId}\\nStatus: ${status.toUpperCase}\\n' +
+           |    'Submission Time: ${UIUtils.formatDate(new Date(submissionTime))}' +
+           |    '${
+                   if (status != "running") {
+                     s"""\\nCompletion Time: ${UIUtils.formatDate(new Date(completionTime))}"""
+                   } else {
+                     ""
+                   }
+                 }'
+           |}
+         """.stripMargin
       }
 
-      val completionStageList = completedStages.map { info =>
-        (info.stageId, info.submissionTime.getOrElse(-1L), info.completionTime.getOrElse(-1L))
-      }.map {
-        case (stageId, submissionTime, completionTime) =>
+      val executorAddedEventArray = listener.executorIdToAddedTime.map {
+        case (executorId, addedTime) =>
           s"""
-               |{
-               |  'start': new Date(${submissionTime}),
-               |  'end': new Date(${completionTime}),
-               |  'content': 'Stage ${stageId}'
-               |}
-             """.stripMargin
+            |{
+            |  'className': 'executor application-tmeline-object added',
+            |  'group': 'executors',
+            |  'start': new Date(${addedTime}),
+            |  'content': '<div>Executor ${executorId} added</div>',
+            |  'title': 'Added at ${UIUtils.formatDate(new Date(addedTime))}'
+            |}
+          """.stripMargin
       }
 
-      val failedStageList = failedStages.map { info =>
-        (info.stageId, info.submissionTime.getOrElse(-1L),
-          info.completionTime.getOrElse(-1L), info.failureReason.getOrElse("Unknown"))
-      }.map {
-        case (stageId, submissionTime, completionTime, failureReason) =>
+      val executorRemovedEventArray = listener.executorIdToRemovedTimeAndReason.map {
+        case (executorId, (removedTime, reason)) =>
           s"""
-               |{
-               |  'start': new Date(${submissionTime}),
-               |  'end': new Date(${completionTime}),
-               |  'content': '<span data-toggle="tooltip" data-placement="auto" data-html="true" title="${failureReason.replaceAll("\n", "<br/>")}">Stage ${stageId}</span>'
-               |}
-             """.stripMargin
+            |{
+            |  'className': 'executor application-timeline-object removed',
+            |  'group': 'executors',
+            |  'start': new Date(${removedTime}),
+            |  'content': '<div>Executor ${executorId} removed (${reason})</div>',
+            |  'title': 'Removed at ${UIUtils.formatDate(new Date(removedTime))}\\n' +
+            |    'Reason: ${reason}'
+            |}
+          """.stripMargin
       }
 
       val eventArrayStr =
-        (activeStageList ++
-          completionStageList ++
-          failedStageList).mkString("[", ",", "]")
+        (stageEventArray ++ executorAddedEventArray ++
+          executorRemovedEventArray).mkString("[", ",", "]")
 
-      content ++= <h4>Events on Job {jobId}</h4> ++ <div id="job-timeline"></div>
+      content ++= <h4>Events on Job Timeline</h4> ++ controlPanel ++
+        <div id="job-timeline"></div>
       content ++=
         <script type="text/javascript">
-          {Unparsed(s"drawJobTimeline(${eventArrayStr})")}
+          {Unparsed(s"drawJobTimeline(${groupArrayStr}, ${eventArrayStr});")}
         </script>
 
       if (shouldShowActiveStages) {

@@ -16,7 +16,7 @@
  */
 
 function drawApplicationTimeline(groupArray, eventObjArray) {
-var groups = new vis.DataSet(groupArray);
+  var groups = new vis.DataSet(groupArray);
   var items = new vis.DataSet(eventObjArray);
   var container = $("#application-timeline")[0];
   var options = {
@@ -28,9 +28,6 @@ var groups = new vis.DataSet(groupArray);
     zoomable: false
   };
 
-  //var container = document.getElementById('application-timeline');
-
-  //var timeline = new vis.Timeline(container, items, options);
   var applicationTimeline = new vis.Timeline(container);
   applicationTimeline.setOptions(options);
   applicationTimeline.setGroups(groups);
@@ -39,27 +36,36 @@ var groups = new vis.DataSet(groupArray);
   setupZoomable("#application-timeline-zoom-lock", applicationTimeline);
 }
 
-function drawJobTimeline(eventObjArray) {
-  var visDataSet = new vis.DataSet(eventObjArray);
+function drawJobTimeline(groupArray, eventObjArray) {
+  var groups = new vis.DataSet(groupArray);
+  var items = new vis.DataSet(eventObjArray);
+
+  var container = $('#job-timeline')[0];
   var options = {
+    groupOrder: function(a, b) {
+      return a.value - b.value;
+    },
     editable: false,
-    align: 'left',
-    selectable: false,
     showCurrentTime: false,
     zoomable: false,
   };
 
-  var container = document.getElementById('job-timeline');
-  var timeline = new vis.Timeline(container, visDataSet, options);
+  var jobTimeline = new vis.Timeline(container);
+  jobTimeline.setOptions(options);
+  jobTimeline.setGroups(groups);
+  jobTimeline.setItems(items);
+
+  setupZoomable("#job-timeline-zoom-lock", jobTimeline);
 }
 
 function drawTaskAssignmentTimeline(groupArray, eventObjArray) {
   var groups = new vis.DataSet(groupArray);
   var items = new vis.DataSet(eventObjArray);
 
-  var container = document.getElementById('task-assignment-timeline');
+  //var container = document.getElementById('task-assignment-timeline');
+  var container = $("#task-assignment-timeline")[0]
   var options = {
-    groupOrder: function (a, b) {
+    groupOrder: function(a, b) {
       return a.value - b.value
     },
     editable: false,

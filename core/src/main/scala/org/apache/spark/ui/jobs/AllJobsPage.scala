@@ -205,7 +205,6 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
           |]
         """.stripMargin
 
-
       val jobEventArray = (completedJobs ++ failedJobs ++ activeJobs).flatMap { jobUIData =>
         val jobId = jobUIData.jobId
         val status = jobUIData.status
@@ -235,15 +234,15 @@ private[ui] class AllJobsPage(parent: JobsTab) extends WebUIPage("") {
              |  'content': '<div class="application-timeline-content">' +
              |    'Job ${jobId}</div>',
              |  'title': 'Job ${jobId}\\nStatus: ${status}\\n' +
-             |  'Submission Time: ${UIUtils.formatDate(new Date(submissionTime))}' +
-             |  '${
-                   if (status != JobExecutionStatus.RUNNING) {
-                     s"""\\nCompletion Time: ${UIUtils.formatDate(new Date(completionTime))}"""
-                   } else {
-                     ""
-                   }
-                 }'
-             | }
+             |    'Submission Time: ${UIUtils.formatDate(new Date(submissionTime))}' +
+             |    '${
+                     if (status != JobExecutionStatus.RUNNING) {
+                       s"""\\nCompletion Time: ${UIUtils.formatDate(new Date(completionTime))}"""
+                     } else {
+                       ""
+                     }
+                   }'
+             |}
            """.stripMargin
           Option(timelineObject)
       }
