@@ -17,11 +17,12 @@
 
 package org.apache.spark.util.logging
 
-import java.io.{File, FileFilter, InputStream}
+import java.io.{File, InputStream}
 
-import com.google.common.io.Files
+import org.apache.hadoop.fs.{FileSystem, Path, PathFilter}
 
 import org.apache.spark.SparkConf
+import org.apache.spark.deploy.SparkHadoopUtil
 
 /**
  * Continuously appends data from input stream into the given file, and rolls
@@ -29,20 +30,37 @@ import org.apache.spark.SparkConf
  * based on the given pattern.
  *
  * @param inputStream             Input stream to read data from
- * @param activeFile              File to write data to
+ * @param activePath              File to write data to
  * @param rollingPolicy           Policy based on which files will be rolled over.
  * @param conf                    SparkConf that is used to pass on extra configurations
  * @param bufferSize              Optional buffer size. Used mainly for testing.
  */
 private[spark] class RollingFileAppender(
     inputStream: InputStream,
-    activeFile: File,
+    fs: FileSystem,
+    activePath: Path,
     val rollingPolicy: RollingPolicy,
     conf: SparkConf,
     bufferSize: Int = RollingFileAppender.DEFAULT_BUFFER_SIZE
-  ) extends FileAppender(inputStream, activeFile, bufferSize) {
+  ) extends FileAppender(inputStream, fs, activePath, bufferSize) {
 
   import RollingFileAppender._
+
+  def this(
+      inputStream: InputStream,
+      activeFile: File,
+      rollingPolicy: RollingPolicy,
+      conf: SparkConf,
+      bufferSize: Int) = {
+    this(
+      inputStream,
+      FileSystem.getLocal(SparkHadoopUtil.get.conf),
+      new Path(activeFile.getAbsolutePath),
+      rollingPolicy,
+      conf,
+      bufferSize
+    )
+  }
 
   private val maxRetainedFiles = conf.getInt(RETAINED_FILES_PROPERTY, -1)
 
@@ -72,59 +90,69 @@ private[spark] class RollingFileAppender(
       }
     } catch {
       case e: Exception =>
-        logError(s"Error rolling over $activeFile", e)
+        logError(s"Error rolling over $activePath", e)
     }
   }
 
   /** Move the active log file to a new rollover file */
   private def moveFile() {
     val rolloverSuffix = rollingPolicy.generateRolledOverFileSuffix()
-    val rolloverFile = new File(
-      activeFile.getParentFile, activeFile.getName + rolloverSuffix).getAbsoluteFile
-    logDebug(s"Attempting to rollover file $activeFile to file $rolloverFile")
-    if (activeFile.exists) {
-      if (!rolloverFile.exists) {
-        Files.move(activeFile, rolloverFile)
-        logInfo(s"Rolled over $activeFile to $rolloverFile")
+    val rolloverPath =
+      getAbsolutePath(new Path(activePath.getParent, activePath.getName + rolloverSuffix))
+    logDebug(s"Attempting to rollover file $activePath to file $rolloverPath")
+    if (fs.exists(activePath)) {
+      if (!fs.exists(rolloverPath)) {
+        fs.rename(activePath, rolloverPath)
+        logInfo(s"Rolled over $activePath to $rolloverPath")
       } else {
         // In case the rollover file name clashes, make a unique file name.
         // The resultant file names are long and ugly, so this is used only
         // if there is a name collision. This can be avoided by the using
         // the right pattern such that name collisions do not occur.
         var i = 0
-        var altRolloverFile: File = null
+        var altRolloverPath: Path = null
         do {
-          altRolloverFile = new File(activeFile.getParent,
-            s"${activeFile.getName}$rolloverSuffix--$i").getAbsoluteFile
+          altRolloverPath =
+            getAbsolutePath(
+              new Path(activePath.getParent,
+                s"${activePath.getName}$rolloverSuffix--$i"))
           i += 1
-        } while (i < 10000 && altRolloverFile.exists)
+        } while (i < 10000 && fs.exists(altRolloverPath))
 
-        logWarning(s"Rollover file $rolloverFile already exists, " +
-          s"rolled over $activeFile to file $altRolloverFile")
-        Files.move(activeFile, altRolloverFile)
+        logWarning(s"Rollover file $rolloverPath already exists, " +
+          s"rolled over $activePath to file $altRolloverPath")
+        fs.rename(activePath, altRolloverPath)
       }
     } else {
-      logWarning(s"File $activeFile does not exist")
+      logWarning(s"File $activePath does not exist")
     }
   }
 
   /** Retain only last few files */
   private[util] def deleteOldFiles() {
     try {
-      val rolledoverFiles = activeFile.getParentFile.listFiles(new FileFilter {
-        def accept(f: File): Boolean = {
-          f.getName.startsWith(activeFile.getName) && f != activeFile
+      val rolledoverPath = fs.listStatus(activePath.getParent, new PathFilter {
+        override def accept(f: Path): Boolean = {
+          f.getName.startsWith(activePath.getName) && f != activePath
         }
-      }).sorted
-      val filesToBeDeleted = rolledoverFiles.take(
-        math.max(0, rolledoverFiles.length - maxRetainedFiles))
-      filesToBeDeleted.foreach { file =>
-        logInfo(s"Deleting file executor log file ${file.getAbsolutePath}")
-        file.delete()
+      }).map(_.getPath).sortWith((p1, p2) => p1.compareTo(p2) > 0)
+      val filesToBeDeleted = rolledoverPath.take(
+        math.max(0, rolledoverPath.length - maxRetainedFiles))
+      filesToBeDeleted.foreach { path =>
+        logInfo(s"Deleting file executor log file ${path}")
+        fs.delete(path, false)
       }
     } catch {
       case e: Exception =>
-        logError("Error cleaning logs in directory " + activeFile.getParentFile.getAbsolutePath, e)
+        logError("Error cleaning logs in directory " + getAbsolutePath(activePath.getParent), e)
+    }
+  }
+
+  private def getAbsolutePath(path: Path): Path = {
+    if (path.isAbsolute) {
+      path
+    } else {
+      new Path(fs.getWorkingDirectory, path)
     }
   }
 }
@@ -154,10 +182,10 @@ private[spark] object RollingFileAppender {
       val fileName = file.getName
       fileName.startsWith(activeFileName) && fileName != activeFileName
     }.sorted
-    val activeFile = {
+    val activePath = {
       val file = new File(directory, activeFileName).getAbsoluteFile
       if (file.exists) Some(file) else None
     }
-    rolledOverFiles ++ activeFile
+    rolledOverFiles ++ activePath
   }
 }

@@ -17,22 +17,43 @@
 
 package org.apache.spark.util.logging
 
-import java.io.{File, FileOutputStream, InputStream, IOException}
+import java.io.{File, OutputStream, InputStream, IOException}
+
+import org.apache.hadoop.fs.{FileSystem, Path}
 
 import org.apache.spark.SparkConf
+import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.internal.Logging
 import org.apache.spark.util.{IntParam, Utils}
 
 /**
  * Continuously appends the data from an input stream into the given file.
  */
-private[spark] class FileAppender(inputStream: InputStream, file: File, bufferSize: Int = 8192)
+private[spark] class FileAppender (
+    inputStream: InputStream,
+    fs: FileSystem,
+    path :Path,
+    bufferSize: Int = 8192)
   extends Logging {
-  @volatile private var outputStream: FileOutputStream = null
+  @volatile private var outputStream: OutputStream = null
   @volatile private var markedForStop = false     // has the appender been asked to stopped
 
+  def this(inputStream: InputStream, file: File) = {
+    this(
+      inputStream,
+      FileSystem.getLocal(SparkHadoopUtil.get.conf),
+      new Path(file.getAbsolutePath)
+    )
+  }
+
+  def this(inputStream: InputStream, file: File, bufferSize: Int) = {
+    this(
+      inputStream,
+      FileSystem.getLocal(SparkHadoopUtil.get.conf),
+      new Path(file.getAbsolutePath))
+  }
   // Thread that reads the input stream and writes to file
-  private val writingThread = new Thread("File appending thread for " + file) {
+  private val writingThread = new Thread("File appending thread for " + path) {
     setDaemon(true)
     override def run() {
       Utils.logUncaughtExceptions {
@@ -80,7 +101,7 @@ private[spark] class FileAppender(inputStream: InputStream, file: File, bufferSi
       }
     } catch {
       case e: Exception =>
-        logError(s"Error writing stream to file $file", e)
+        logError(s"Error writing stream to file $path", e)
     }
   }
 
@@ -94,15 +115,16 @@ private[spark] class FileAppender(inputStream: InputStream, file: File, bufferSi
 
   /** Open the file output stream */
   protected def openFile() {
-    outputStream = new FileOutputStream(file, false)
-    logDebug(s"Opened file $file")
+    outputStream = fs.create(path)
+//    outputStream = new FileOutputStream(file, false)
+    logDebug(s"Opened file $path")
   }
 
   /** Close the file output stream */
   protected def closeFile() {
     outputStream.flush()
     outputStream.close()
-    logDebug(s"Closed file $file")
+    logDebug(s"Closed file $path")
   }
 }
 
@@ -113,7 +135,7 @@ private[spark] class FileAppender(inputStream: InputStream, file: File, bufferSi
 private[spark] object FileAppender extends Logging {
 
   /** Create the right appender based on Spark configuration */
-  def apply(inputStream: InputStream, file: File, conf: SparkConf): FileAppender = {
+  def apply(inputStream: InputStream, fs: FileSystem, file: Path, conf: SparkConf): FileAppender = {
 
     import RollingFileAppender._
 
@@ -143,9 +165,9 @@ private[spark] object FileAppender extends Logging {
       validatedParams.map {
         case (interval, pattern) =>
           new RollingFileAppender(
-            inputStream, file, new TimeBasedRollingPolicy(interval, pattern), conf)
+            inputStream, fs, file, new TimeBasedRollingPolicy(interval, pattern), conf)
       }.getOrElse {
-        new FileAppender(inputStream, file)
+        new FileAppender(inputStream, fs, file)
       }
     }
 
@@ -153,17 +175,17 @@ private[spark] object FileAppender extends Logging {
       rollingSizeBytes match {
         case IntParam(bytes) =>
           logInfo(s"Rolling executor logs enabled for $file with rolling every $bytes bytes")
-          new RollingFileAppender(inputStream, file, new SizeBasedRollingPolicy(bytes), conf)
+          new RollingFileAppender(inputStream, fs, file, new SizeBasedRollingPolicy(bytes), conf)
         case _ =>
           logWarning(
             s"Illegal size [$rollingSizeBytes] for rolling executor logs, rolling logs not enabled")
-          new FileAppender(inputStream, file)
+          new FileAppender(inputStream, fs, file)
       }
     }
 
     rollingStrategy match {
       case "" =>
-        new FileAppender(inputStream, file)
+        new FileAppender(inputStream, fs, file)
       case "time" =>
         createTimeBasedAppender()
       case "size" =>
@@ -172,8 +194,15 @@ private[spark] object FileAppender extends Logging {
         logWarning(
           s"Illegal strategy [$rollingStrategy] for rolling executor logs, " +
             s"rolling logs not enabled")
-        new FileAppender(inputStream, file)
+        new FileAppender(inputStream, fs, file)
     }
+  }
+
+  def apply(inputStream: InputStream, file: File, conf: SparkConf): FileAppender = {
+    apply(
+      inputStream,
+      FileSystem.getLocal(SparkHadoopUtil.get.conf),
+      new Path(file.getAbsolutePath), conf)
   }
 }
 

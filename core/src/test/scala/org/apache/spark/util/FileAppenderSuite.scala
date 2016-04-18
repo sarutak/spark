@@ -25,6 +25,7 @@ import scala.collection.mutable.HashSet
 import scala.reflect._
 
 import com.google.common.io.Files
+import org.apache.hadoop.fs.Path
 import org.apache.log4j.{Appender, Level, Logger}
 import org.apache.log4j.spi.LoggingEvent
 import org.mockito.ArgumentCaptor
