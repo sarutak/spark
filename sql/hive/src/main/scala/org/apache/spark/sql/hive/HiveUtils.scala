@@ -387,7 +387,7 @@ private[spark] object HiveUtils extends Logging {
         propMap.put(confvar.varname, confvar.getDefaultExpr())
       }
     }
-    propMap.put(HiveConf.ConfVars.METASTORE_SCHEMA_VERIFICATION.varname, "false")
+    // propMap.put(HiveConf.ConfVars.METASTORE_SCHEMA_VERIFICATION.varname, "false")
     propMap.put(HiveConf.ConfVars.METASTOREWAREHOUSE.varname, localMetastore.toURI.toString)
     propMap.put(HiveConf.ConfVars.METASTORECONNECTURLKEY.varname,
       s"jdbc:derby:${withInMemoryMode};databaseName=${localMetastore.getAbsolutePath};create=true")

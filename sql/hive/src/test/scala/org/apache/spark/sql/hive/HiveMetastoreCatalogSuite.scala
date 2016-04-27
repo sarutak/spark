@@ -19,6 +19,8 @@ package org.apache.spark.sql.hive
 
 import java.io.File
 
+import org.apache.hadoop.hive.conf.HiveConf
+
 import org.apache.spark.sql.{QueryTest, Row, SaveMode}
 import org.apache.spark.sql.catalyst.TableIdentifier
 import org.apache.spark.sql.catalyst.catalog.CatalogTableType
@@ -48,6 +50,15 @@ class HiveMetastoreCatalogSuite extends TestHiveSingleton {
     val df = hiveContext.sql("SELECT * FROM src")
     logInfo(df.queryExecution.toString)
     df.as('a).join(df.as('b), $"a.key" === $"b.key")
+  }
+
+  test("disable schema verification for dummy/temporary metastore") {
+    val sc = hiveContext.sparkContext
+    val sparkConf = sc.getConf
+    val hadoopConf = sc.hadoopConfiguration
+    val sparkSession = hiveContext
+    hadoopConf.setBoolean(HiveConf.ConfVars.METASTORE_SCHEMA_VERIFICATION.varname, true)
+    
   }
 }
 
