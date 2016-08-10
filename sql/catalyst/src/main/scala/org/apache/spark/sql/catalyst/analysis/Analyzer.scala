@@ -605,6 +605,10 @@ class Analyzer(
             result
           case UnresolvedExtractValue(child, fieldExpr) if child.resolved =>
             ExtractValue(child, fieldExpr, resolver)
+          case l @ LazyDeterminedAttribute(name, dataType, nullable, plan, candidate) =>
+            val p = q.find(_ == l.plan)
+            p.get.expressions
+            candidate
         }
     }
 

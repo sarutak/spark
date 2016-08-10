@@ -22,6 +22,7 @@ import java.util.{Objects, UUID}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.UnresolvedAttribute
 import org.apache.spark.sql.catalyst.expressions.codegen._
+import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.catalyst.util.quoteIdentifier
 import org.apache.spark.sql.types._
 
@@ -352,4 +353,23 @@ object VirtualColumn {
   val hiveGroupingIdName: String = "grouping__id"
   val groupingIdName: String = "spark_grouping_id"
   val groupingIdAttribute: UnresolvedAttribute = UnresolvedAttribute(groupingIdName)
+}
+
+case class LazyDeterminedAttribute(
+    name: String,
+    dataType: DataType,
+    nullable: Boolean = true,
+    plan: LogicalPlan,
+    candidate: NamedExpression)
+  extends Attribute with Unevaluable {
+
+  override def exprId: ExprId = throw new UnsupportedOperationException
+  override def newInstance(): LazyDeterminedAttribute = throw new UnsupportedOperationException
+  override def qualifier: Option[String] = throw new UnsupportedOperationException
+  override def withNullability(newNullability: Boolean): LazyDeterminedAttribute =
+    throw new UnsupportedOperationException
+  override def withName(newName: String): LazyDeterminedAttribute =
+    throw new UnsupportedOperationException
+  override def withQualifier(newQualifier: Option[String]): LazyDeterminedAttribute =
+    throw new UnsupportedOperationException
 }

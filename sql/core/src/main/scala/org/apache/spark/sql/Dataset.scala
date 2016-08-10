@@ -956,7 +956,13 @@ class Dataset[T] private[sql](
     case "*" =>
       Column(ResolvedStar(queryExecution.analyzed.output))
     case _ =>
-      val expr = resolve(colName)
+      val candidateExpr = resolve(colName)
+      val expr = LazyDeterminedAttribute(
+        candidateExpr.name,
+        candidateExpr.dataType,
+        candidateExpr.nullable,
+        logicalPlan,
+        candidateExpr)
       Column(expr)
   }
 

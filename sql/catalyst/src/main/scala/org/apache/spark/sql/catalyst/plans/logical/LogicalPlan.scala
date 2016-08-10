@@ -25,8 +25,11 @@ import org.apache.spark.sql.catalyst.plans.QueryPlan
 import org.apache.spark.sql.catalyst.trees.CurrentOrigin
 import org.apache.spark.sql.types.StructType
 
+object LogicalPlan {
+  private val curId = new java.util.concurrent.atomic.AtomicLong()
+}
 
-abstract class LogicalPlan extends QueryPlan[LogicalPlan] with Logging {
+abstract class LogicalPlan(id: Long = LogicalPlan.curId.get()) extends QueryPlan[LogicalPlan] with Logging {
 
   private var _analyzed: Boolean = false
 
