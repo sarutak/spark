@@ -27,11 +27,14 @@ import org.apache.spark.sql.types.StructType
 
 object LogicalPlan {
   private val curId = new java.util.concurrent.atomic.AtomicLong()
+  def newPlanId: Long = curId.getAndIncrement()
 }
 
-abstract class LogicalPlan(id: Long = LogicalPlan.curId.get()) extends QueryPlan[LogicalPlan] with Logging {
+abstract class LogicalPlan extends QueryPlan[LogicalPlan] with Logging {
 
   private var _analyzed: Boolean = false
+
+  private var _planId: Long = LogicalPlan.newPlanId
 
   /**
    * Marks this plan as already analyzed.  This should only be called by CheckAnalysis.
@@ -44,6 +47,10 @@ abstract class LogicalPlan(id: Long = LogicalPlan.curId.get()) extends QueryPlan
    * have already been analyzed, and can be reset by transformations.
    */
   def analyzed: Boolean = _analyzed
+
+  private[catalyst] def setPlanId(planId: Long): Unit = { _planId = planId }
+
+  def planId: Long = _planId
 
   /** Returns true if this subtree contains any streaming data sources. */
   def isStreaming: Boolean = children.exists(_.isStreaming == true)

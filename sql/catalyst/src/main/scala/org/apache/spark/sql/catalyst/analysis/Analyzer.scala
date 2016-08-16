@@ -483,36 +483,62 @@ class Analyzer(
       val conflictingAttributes = left.outputSet.intersect(right.outputSet)
       logDebug(s"Conflicting attributes ${conflictingAttributes.mkString(",")} " +
         s"between $left and $right")
+      // scalastyle:off println
+      println("OK")
+      println(right)
+      // scalastyle:on println
 
       right.collect {
         // Handle base relations that might appear more than once.
         case oldVersion: MultiInstanceRelation
             if oldVersion.outputSet.intersect(conflictingAttributes).nonEmpty =>
           val newVersion = oldVersion.newInstance()
+          println(oldVersion.planId)
+          newVersion.setPlanId(oldVersion.planId)
           (oldVersion, newVersion)
 
         case oldVersion: SerializeFromObject
             if oldVersion.outputSet.intersect(conflictingAttributes).nonEmpty =>
-          (oldVersion, oldVersion.copy(serializer = oldVersion.serializer.map(_.newInstance())))
+          val newVersion = oldVersion.copy(serializer = oldVersion.serializer.map(_.newInstance()))
+          newVersion.setPlanId(oldVersion.planId)
+          // scalastyle:off println
+          println("\n" * 3)
+          println(oldVersion.planId)
+          println("\n" * 3)
+          // scalastyle:on println
+          (oldVersion, newVersion)
 
         // Handle projects that create conflicting aliases.
         case oldVersion @ Project(projectList, _)
             if findAliases(projectList).intersect(conflictingAttributes).nonEmpty =>
-          (oldVersion, oldVersion.copy(projectList = newAliases(projectList)))
+          val newVersion = oldVersion.copy(projectList = newAliases(projectList))
+          newVersion.setPlanId(oldVersion.planId)
+          // scalastyle:off println
+          println("\n" * 3)
+          println(oldVersion.planId)
+          println("\n" * 3)
+          // scalastyle:on println
+          (oldVersion, newVersion)
 
         case oldVersion @ Aggregate(_, aggregateExpressions, _)
             if findAliases(aggregateExpressions).intersect(conflictingAttributes).nonEmpty =>
-          (oldVersion, oldVersion.copy(aggregateExpressions = newAliases(aggregateExpressions)))
+          val newVersion = oldVersion.copy(aggregateExpressions = newAliases(aggregateExpressions))
+          newVersion.setPlanId(oldVersion.planId)
+          (oldVersion, newVersion)
 
         case oldVersion: Generate
             if oldVersion.generatedSet.intersect(conflictingAttributes).nonEmpty =>
           val newOutput = oldVersion.generatorOutput.map(_.newInstance())
-          (oldVersion, oldVersion.copy(generatorOutput = newOutput))
+          val newVersion = oldVersion.copy(generatorOutput = newOutput)
+          newVersion.setPlanId(oldVersion.planId)
+          (oldVersion, newVersion)
 
         case oldVersion @ Window(windowExpressions, _, _, child)
             if AttributeSet(windowExpressions.map(_.toAttribute)).intersect(conflictingAttributes)
               .nonEmpty =>
-          (oldVersion, oldVersion.copy(windowExpressions = newAliases(windowExpressions)))
+          val newVersion = oldVersion.copy(windowExpressions = newAliases(windowExpressions))
+          newVersion.setPlanId(oldVersion.planId)
+          (oldVersion, newVersion)
       }
         // Only handle first case, others will be fixed on the next pass.
         .headOption match {
@@ -606,9 +632,18 @@ class Analyzer(
           case UnresolvedExtractValue(child, fieldExpr) if child.resolved =>
             ExtractValue(child, fieldExpr, resolver)
           case l @ LazyDeterminedAttribute(name, dataType, nullable, plan, candidate) =>
-            val p = q.find(_ == l.plan)
-            p.get.expressions
-            candidate
+            val p = q.find(_.planId == plan.planId)
+            if (p.isDefined) {
+              val foundPlan = p.get
+              if (foundPlan.expressions == plan.expressions) {
+                candidate
+              } else {
+                println("OK")
+                foundPlan.resolveQuoted(name, resolver).get
+              }
+            } else {
+              candidate
+            }
         }
     }
 
