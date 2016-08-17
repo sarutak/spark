@@ -899,7 +899,7 @@ class Dataset[T] private[sql](
    */
   @scala.annotation.varargs
   def sort(sortCol: String, sortCols: String*): Dataset[T] = {
-    sort((sortCol +: sortCols).map(apply) : _*)
+    sort((sortCol +: sortCols).map(colInternal) : _*)
   }
 
   /**
@@ -952,18 +952,20 @@ class Dataset[T] private[sql](
    * @group untypedrel
    * @since 2.0.0
    */
-  def col(colName: String): Column = colName match {
-    case "*" =>
-      Column(ResolvedStar(queryExecution.analyzed.output))
-    case _ =>
-      val candidateExpr = resolve(colName)
-      val expr = LazyDeterminedAttribute(
-        candidateExpr.name,
-        candidateExpr.dataType,
-        candidateExpr.nullable,
-        logicalPlan,
-        candidateExpr)
-      Column(expr)
+  def col(colName: String): Column = withStarResolved(colName) {
+    val candidateExpr = resolve(colName)
+    val expr = LazyDeterminedAttribute(candidateExpr.name, logicalPlan, candidateExpr)
+    Column(expr)
+  }
+
+  private[sql] def colInternal(colName: String): Column = withStarResolved(colName) {
+    val expr = resolve(colName)
+    Column(expr)
+  }
+
+  private def withStarResolved(colName: String)(f: => Column): Column = colName match {
+    case "*" => Column(ResolvedStar(queryExecution.analyzed.output))
+    case _ => f
   }
 
   /**
@@ -1711,7 +1713,8 @@ class Dataset[T] private[sql](
       val convert = CatalystTypeConverters.createToCatalystConverter(dataType)
       f(row(0).asInstanceOf[A]).map(o => InternalRow(convert(o)))
     }
-    val generator = UserDefinedGenerator(elementSchema, rowFunction, apply(inputColumn).expr :: Nil)
+    val generator =
+      UserDefinedGenerator(elementSchema, rowFunction, colInternal(inputColumn).expr :: Nil)
 
     withPlan {
       Generate(generator, join = true, outer = false,

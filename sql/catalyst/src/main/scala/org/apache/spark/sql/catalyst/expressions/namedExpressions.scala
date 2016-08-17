@@ -357,12 +357,12 @@ object VirtualColumn {
 
 case class LazyDeterminedAttribute(
     name: String,
-    dataType: DataType,
-    nullable: Boolean = true,
     plan: LogicalPlan,
     candidate: NamedExpression)
   extends Attribute with Unevaluable {
 
+  override lazy val resolved = false
+  override def dataType: DataType = throw new UnsupportedOperationException
   override def exprId: ExprId = throw new UnsupportedOperationException
   override def newInstance(): LazyDeterminedAttribute = throw new UnsupportedOperationException
   override def qualifier: Option[String] = throw new UnsupportedOperationException
@@ -372,4 +372,5 @@ case class LazyDeterminedAttribute(
     throw new UnsupportedOperationException
   override def withQualifier(newQualifier: Option[String]): LazyDeterminedAttribute =
     throw new UnsupportedOperationException
+  override def nullable: Boolean = throw new UnsupportedOperationException
 }
