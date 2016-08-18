@@ -219,7 +219,7 @@ case class AttributeReference(
   extends Attribute with Unevaluable {
 
   /**
-   * Returns true iff the expression id is the same for both attributes.
+   * Returns true if the expression id is the same for both attributes.
    */
   def sameRef(other: AttributeReference): Boolean = this.exprId == other.exprId
 
@@ -353,24 +353,4 @@ object VirtualColumn {
   val hiveGroupingIdName: String = "grouping__id"
   val groupingIdName: String = "spark_grouping_id"
   val groupingIdAttribute: UnresolvedAttribute = UnresolvedAttribute(groupingIdName)
-}
-
-case class LazyDeterminedAttribute(
-    name: String,
-    plan: LogicalPlan,
-    candidate: NamedExpression)
-  extends Attribute with Unevaluable {
-
-  override lazy val resolved = false
-  override def dataType: DataType = throw new UnsupportedOperationException
-  override def exprId: ExprId = throw new UnsupportedOperationException
-  override def newInstance(): LazyDeterminedAttribute = throw new UnsupportedOperationException
-  override def qualifier: Option[String] = throw new UnsupportedOperationException
-  override def withNullability(newNullability: Boolean): LazyDeterminedAttribute =
-    throw new UnsupportedOperationException
-  override def withName(newName: String): LazyDeterminedAttribute =
-    throw new UnsupportedOperationException
-  override def withQualifier(newQualifier: Option[String]): LazyDeterminedAttribute =
-    throw new UnsupportedOperationException
-  override def nullable: Boolean = throw new UnsupportedOperationException
 }

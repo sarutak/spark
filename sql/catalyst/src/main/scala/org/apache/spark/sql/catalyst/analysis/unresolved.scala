@@ -370,3 +370,26 @@ case class GetColumnByOrdinal(ordinal: Int, dataType: DataType) extends LeafExpr
   override def nullable: Boolean = throw new UnresolvedException(this, "nullable")
   override lazy val resolved = false
 }
+
+case class LazilyDeterminedAttribute(
+    candidate: NamedExpression)(
+    val plan: LogicalPlan)
+  extends Attribute with Unevaluable {
+  // We need to keep the constructor curried
+  // so that we can compare like df1("col1") == df2("col1") especially in case of test.
+
+  override def name: String = candidate.name
+  override def exprId: ExprId = candidate.exprId
+  override def dataType: DataType = candidate.dataType
+  override def nullable: Boolean = candidate.nullable
+  override def qualifier: Option[String] = candidate.qualifier
+  override lazy val resolved = false
+
+  override def newInstance(): Attribute = throw new UnresolvedException(this, "newInstance")
+  override def withNullability(newNullability: Boolean): Attribute =
+    throw new UnresolvedException(this, "withNullability")
+  override def withName(newName: String): Attribute =
+    throw new UnresolvedException(this, "withName")
+  override def withQualifier(newQualifier: Option[String]): Attribute =
+    throw new UnresolvedException(this, "withQualifier")
+}

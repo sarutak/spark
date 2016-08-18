@@ -493,31 +493,26 @@ class Analyzer(
 
         case oldVersion: SerializeFromObject
             if oldVersion.outputSet.intersect(conflictingAttributes).nonEmpty =>
-          val newVersion = oldVersion.copy(serializer = oldVersion.serializer.map(_.newInstance()))
-          (oldVersion, newVersion)
+          (oldVersion, oldVersion.copy(serializer = oldVersion.serializer.map(_.newInstance())))
 
         // Handle projects that create conflicting aliases.
         case oldVersion @ Project(projectList, _)
             if findAliases(projectList).intersect(conflictingAttributes).nonEmpty =>
-          val newVersion = oldVersion.copy(projectList = newAliases(projectList))
-          (oldVersion, newVersion)
+          (oldVersion, oldVersion.copy(projectList = newAliases(projectList)))
 
         case oldVersion @ Aggregate(_, aggregateExpressions, _)
             if findAliases(aggregateExpressions).intersect(conflictingAttributes).nonEmpty =>
-          val newVersion = oldVersion.copy(aggregateExpressions = newAliases(aggregateExpressions))
-          (oldVersion, newVersion)
+          (oldVersion, oldVersion.copy(aggregateExpressions = newAliases(aggregateExpressions)))
 
         case oldVersion: Generate
             if oldVersion.generatedSet.intersect(conflictingAttributes).nonEmpty =>
           val newOutput = oldVersion.generatorOutput.map(_.newInstance())
-          val newVersion = oldVersion.copy(generatorOutput = newOutput)
-          (oldVersion, newVersion)
+          (oldVersion, oldVersion.copy(generatorOutput = newOutput))
 
         case oldVersion @ Window(windowExpressions, _, _, child)
             if AttributeSet(windowExpressions.map(_.toAttribute)).intersect(conflictingAttributes)
               .nonEmpty =>
-          val newVersion = oldVersion.copy(windowExpressions = newAliases(windowExpressions))
-          (oldVersion, newVersion)
+          (oldVersion, oldVersion.copy(windowExpressions = newAliases(windowExpressions)))
       }
         // Only handle first case, others will be fixed on the next pass.
         .headOption match {
@@ -615,17 +610,34 @@ class Analyzer(
             result
           case UnresolvedExtractValue(child, fieldExpr) if child.resolved =>
             ExtractValue(child, fieldExpr, resolver)
-          case l @ LazyDeterminedAttribute(name, plan, candidate) =>
-            val p = q.find(p2 => p2.planId == plan.planId && p2 != plan)
-            if (p.isDefined) {
-              val foundPlan = p.get
-              if (foundPlan.expressions == plan.expressions) {
-                candidate
+          case l @ LazilyDeterminedAttribute(candidate) =>
+            /*
+            val queue = new ArrayBuffer[LogicalPlan]
+            var foundPlanOpt: Option[LogicalPlan] = None
+            queue.append(q)
+
+            // Do breadth first search to find most exact logical plan
+            while (queue.nonEmpty && foundPlanOpt.isEmpty) {
+              val currentPlan = queue.remove(0)
+              if (currentPlan.planId == l.plan.planId) {
+                foundPlanOpt = Option(currentPlan)
               } else {
-                foundPlan.resolveQuoted(name, resolver).get
+                val childPlans = currentPlan.children.reverse
+                childPlans.foreach(queue.append(_))
               }
+            }
+            */
+            val foundPlanOpt = q.findByBreadthFirst(_.planId == l.plan.planId)
+            val errorMsg = s"""Cannot resolve column name "${l.name}" """
+//              s"""among (${q.schema.fieldNames.mkString(", ")})"""
+            val foundPlan = foundPlanOpt.getOrElse { failAnalysis(errorMsg) }
+
+            if (foundPlan == l.plan) {
+              l.candidate
             } else {
-              candidate
+              foundPlan.resolveQuoted(l.name, resolver).getOrElse {
+               failAnalysis(errorMsg)
+              }
             }
         }
     }

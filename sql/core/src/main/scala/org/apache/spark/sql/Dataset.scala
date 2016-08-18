@@ -954,18 +954,8 @@ class Dataset[T] private[sql](
    */
   def col(colName: String): Column = withStarResolved(colName) {
     val candidateExpr = resolve(colName)
-    val expr = LazyDeterminedAttribute(candidateExpr.name, logicalPlan, candidateExpr)
+    val expr = LazilyDeterminedAttribute(candidateExpr)(logicalPlan)
     Column(expr)
-  }
-
-  private[sql] def colInternal(colName: String): Column = withStarResolved(colName) {
-    val expr = resolve(colName)
-    Column(expr)
-  }
-
-  private def withStarResolved(colName: String)(f: => Column): Column = colName match {
-    case "*" => Column(ResolvedStar(queryExecution.analyzed.output))
-    case _ => f
   }
 
   /**
@@ -1845,6 +1835,17 @@ class Dataset[T] private[sql](
       case Column(u: UnresolvedAttribute) =>
         queryExecution.analyzed.resolveQuoted(
           u.name, sparkSession.sessionState.analyzer.resolver).getOrElse(u)
+      case Column(l: LazilyDeterminedAttribute) =>
+        val foundExpression =
+          logicalPlan.findByBreadthFirst(_.planId == l.plan.planId)
+            .flatMap(_.resolveQuoted(l.name, sparkSession.sessionState.analyzer.resolver))
+            .getOrElse(l.candidate)
+        /*
+          logicalPlan.find(p => p.planId == l.plan.planId && p!= l.plan)
+                     .flatMap(_.resolveQuoted(l.name, sparkSession.sessionState.analyzer.resolver))
+                     .getOrElse(l.candidate)
+                     */
+        foundExpression
       case Column(expr: Expression) => expr
     }
     val attrs = this.logicalPlan.output
@@ -2635,6 +2636,16 @@ class Dataset[T] private[sql](
     withTypedPlan {
       Sort(sortOrder, global = global, logicalPlan)
     }
+  }
+
+  private[sql] def colInternal(colName: String): Column = withStarResolved(colName) {
+    val expr = resolve(colName)
+    Column(expr)
+  }
+
+  private def withStarResolved(colName: String)(f: => Column): Column = colName match {
+    case "*" => Column(ResolvedStar(queryExecution.analyzed.output))
+    case _ => f
   }
 
   /** A convenient function to wrap a logical plan and produce a DataFrame. */
