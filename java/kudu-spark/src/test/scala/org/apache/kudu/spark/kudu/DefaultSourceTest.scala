@@ -29,12 +29,12 @@ import org.apache.spark.sql.functions._
 import org.junit.Assert._
 import org.junit.runner.RunWith
 import org.scalatest.junit.JUnitRunner
-import org.scalatest.{BeforeAndAfter, FunSuite}
+import org.scalatest.{BeforeAndAfterEach, FunSuite}
 
 import org.apache.kudu.client.CreateTableOptions;
 
 @RunWith(classOf[JUnitRunner])
-class DefaultSourceTest extends FunSuite with TestContext with BeforeAndAfter {
+class DefaultSourceTest extends FunSuite with BeforeAndAfterEach with TestContext {
 
   test("timestamp conversion") {
     val epoch = new Timestamp(0)
@@ -60,7 +60,8 @@ class DefaultSourceTest extends FunSuite with TestContext with BeforeAndAfter {
   var rows : IndexedSeq[(Int, Int, String, Long)] = _
   var kuduOptions : Map[String, String] = _
 
-  before {
+  override def beforeEach() {
+    super.beforeEach()
     val rowCount = 10
     rows = insertRows(rowCount)
 

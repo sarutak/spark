@@ -17,6 +17,7 @@
 
 package org.apache.kudu;
 
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -35,7 +36,7 @@ import org.apache.kudu.client.PartialRow;
  */
 @InterfaceAudience.Public
 @InterfaceStability.Evolving
-public class Schema {
+public class Schema implements Serializable {
 
   /**
    * Mapping of column index to column.

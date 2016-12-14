@@ -23,7 +23,7 @@ import scala.collection.immutable.IndexedSeq
 
 import com.google.common.collect.ImmutableList
 import org.apache.spark.{SparkConf, SparkContext}
-import org.scalatest.{BeforeAndAfterAll, Suite}
+import org.scalatest.{BeforeAndAfterAll, BeforeAndAfterEach, Suite}
 
 import org.apache.kudu.ColumnSchema.ColumnSchemaBuilder
 import org.apache.kudu.client.KuduClient.KuduClientBuilder
@@ -31,7 +31,7 @@ import org.apache.kudu.client.MiniKuduCluster.MiniKuduClusterBuilder
 import org.apache.kudu.client.{CreateTableOptions, KuduClient, KuduTable, MiniKuduCluster}
 import org.apache.kudu.{Schema, Type}
 
-trait TestContext extends BeforeAndAfterAll { self: Suite =>
+trait TestContext extends BeforeAndAfterEach with BeforeAndAfterAll { self: Suite =>
 
   var sc: SparkContext = null
   var miniCluster: MiniKuduCluster = null
@@ -78,16 +78,24 @@ trait TestContext extends BeforeAndAfterAll { self: Suite =>
     assert(miniCluster.waitForTabletServers(1))
 
     kuduContext = new KuduContext(miniCluster.getMasterAddresses)
-
-    val tableOptions = new CreateTableOptions().setRangePartitionColumns(List("key").asJava)
-                                               .setNumReplicas(1)
-    table = kuduClient.createTable(tableName, schema, tableOptions)
   }
 
   override def afterAll() {
     if (kuduClient != null) kuduClient.shutdown()
     if (miniCluster != null) miniCluster.shutdown()
     if (sc != null) sc.stop()
+  }
+
+  abstract override def beforeEach() {
+    super.beforeEach()
+    val tableOptions = new CreateTableOptions().setRangePartitionColumns(List("key").asJava)
+                                               .setNumReplicas(1)
+    table = kuduClient.createTable(tableName, schema, tableOptions)
+  }
+
+  abstract override def afterEach() {
+    kuduClient.deleteTable(tableName)
+    super.afterEach()
   }
 
   def deleteRow(key: Int): Unit = {

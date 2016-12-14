@@ -17,6 +17,8 @@
 
 package org.apache.kudu;
 
+import java.io.Serializable;
+
 import org.apache.kudu.Common.CompressionType;
 import org.apache.kudu.Common.EncodingType;
 import org.apache.kudu.annotations.InterfaceAudience;
@@ -28,7 +30,7 @@ import org.apache.kudu.annotations.InterfaceStability;
  */
 @InterfaceAudience.Public
 @InterfaceStability.Evolving
-public class ColumnSchema {
+public class ColumnSchema implements Serializable {
 
   private final String name;
   private final Type type;

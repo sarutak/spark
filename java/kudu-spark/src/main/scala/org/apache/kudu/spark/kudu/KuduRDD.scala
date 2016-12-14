@@ -129,6 +129,4 @@ private[spark] class KuduRow(private val rowResult: RowResult) extends Row {
   }
 
   override def copy(): Row = Row.fromSeq(Range(0, length).map(get))
-
-  override def toString(): String = rowResult.toString
 }

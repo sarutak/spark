@@ -62,4 +62,28 @@ class KuduContextTest extends FunSuite with TestContext with Matchers {
     dataDF.sort("key").withColumn("c8_binary", decode(dataDF("c8_binary"), "UTF-8"))
       .select("c8_binary").first.get(0).shouldBe("bytes 0")
   }
+
+  test("Test kuduRDD.collect doesn't fail") {
+    val rows = insertRows(rowCount)
+    val scanList = kuduContext.kuduRDD(sc, "test", Seq("key", "c1_i", "c2_s", "c3_double",
+        "c4_long", "c5_bool", "c6_short", "c7_float", "c8_binary", "c9_unixtime_micros", "c10_byte"))
+      .collect
+
+    scanList.foreach(r => {
+      val index = r.getInt(0)
+      assert(r.getInt(0) == rows.apply(index)._1)
+      assert(r.getInt(1) == rows.apply(index)._2)
+      assert(r.getString(2) == rows.apply(index)._3)
+      assert(r.getDouble(3) == rows.apply(index)._2.toDouble)
+      assert(r.getLong(4) == rows.apply(index)._2.toLong)
+      assert(r.getBoolean(5) == (rows.apply(index)._2%2==1))
+      assert(r.getShort(6) == rows.apply(index)._2.toShort)
+      assert(r.getFloat(7) == rows.apply(index)._2.toFloat)
+      val binaryBytes = s"bytes ${rows.apply(index)._2}".getBytes().toSeq
+      assert(r.getAs[Array[Byte]](8).toSeq == binaryBytes)
+      assert(r.getTimestamp(9) ==
+        KuduRelation.microsToTimestamp(rows.apply(index)._4))
+      assert(r.getByte(10) == rows.apply(index)._2.toByte)
+    })
+  }
 }
