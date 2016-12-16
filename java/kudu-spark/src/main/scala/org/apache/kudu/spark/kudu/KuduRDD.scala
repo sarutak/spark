@@ -102,31 +102,41 @@ private[spark] class RowResultIteratorScala(private val scanner: KuduScanner) ex
     currentIterator.hasNext
   }
 
-  override def next(): Row = new KuduRow(currentIterator.next())
+  override def next(): Row = {
+    val rowResult = currentIterator.next()
+    val length = rowResult.getColumnProjection.getColumnCount
+    val array = new Array[Any](length)
+    var i = 0
+
+    while (i < length) {
+      array(i) = 
+        if (rowResult.isNull(i)) null
+        else rowResult.getColumnType(i) match {
+          case Type.BOOL => rowResult.getBoolean(i)
+          case Type.INT8 => rowResult.getByte(i)
+          case Type.INT16 => rowResult.getShort(i)
+          case Type.INT32 => rowResult.getInt(i)
+          case Type.INT64 => rowResult.getLong(i)
+          case Type.UNIXTIME_MICROS => KuduRelation.microsToTimestamp(rowResult.getLong(i))
+          case Type.FLOAT => rowResult.getFloat(i)
+          case Type.DOUBLE => rowResult.getDouble(i)
+          case Type.STRING => rowResult.getString(i)
+          case Type.BINARY => rowResult.getBinaryCopy(i)
+        }
+        i += 1
+    }
+    new KuduRow(array)
+  }
 }
 
 /**
   * A Spark SQL [[Row]] which wraps a Kudu [[RowResult]].
-  * @param rowResult the wrapped row result
+  * @param values the row result represented as array.
   */
-private[spark] class KuduRow(private val rowResult: RowResult) extends Row {
-  override def length: Int = rowResult.getColumnProjection.getColumnCount
+private[spark] class KuduRow(private val values: Array[Any]) extends Row {
+  override def length: Int = values.length
 
-  override def get(i: Int): Any = {
-    if (rowResult.isNull(i)) null
-    else rowResult.getColumnType(i) match {
-      case Type.BOOL => rowResult.getBoolean(i)
-      case Type.INT8 => rowResult.getByte(i)
-      case Type.INT16 => rowResult.getShort(i)
-      case Type.INT32 => rowResult.getInt(i)
-      case Type.INT64 => rowResult.getLong(i)
-      case Type.UNIXTIME_MICROS => KuduRelation.microsToTimestamp(rowResult.getLong(i))
-      case Type.FLOAT => rowResult.getFloat(i)
-      case Type.DOUBLE => rowResult.getDouble(i)
-      case Type.STRING => rowResult.getString(i)
-      case Type.BINARY => rowResult.getBinaryCopy(i)
-    }
-  }
+  override def get(i: Int): Any = values(i)
 
   override def copy(): Row = Row.fromSeq(Range(0, length).map(get))
 }

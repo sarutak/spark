@@ -17,7 +17,6 @@
 
 package org.apache.kudu.client;
 
-import java.io.Serializable;
 import java.nio.ByteBuffer;
 import java.text.DateFormat;
 import java.text.FieldPosition;
@@ -38,7 +37,7 @@ import org.apache.kudu.util.Slice;
  */
 @InterfaceAudience.Public
 @InterfaceStability.Evolving
-public class RowResult implements Serializable {
+public class RowResult {
 
   private static final int INDEX_RESET_LOCATION = -1;
 

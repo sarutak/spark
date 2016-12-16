@@ -24,7 +24,6 @@ import static java.nio.ByteOrder.LITTLE_ENDIAN;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.Serializable;
 import java.nio.ByteBuffer;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.FileChannel;
@@ -44,7 +43,7 @@ import org.apache.kudu.annotations.InterfaceAudience;
  * Little Endian slice of a byte array.
  */
 @InterfaceAudience.Private
-public final class Slice implements Comparable<Slice>, Serializable {
+public final class Slice implements Comparable<Slice> {
   private final byte[] data;
   private final int offset;
   private final int length;
