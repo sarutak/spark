@@ -181,7 +181,13 @@ case class GenerateExec(
         val row = codeGenAccessor(ctx, data.value, "col", index, st, nullable, checks)
         val fieldChecks = checks ++ optionalCode(nullable, row.isNull)
         val columns = st.fields.toSeq.zipWithIndex.map { case (f, i) =>
-          codeGenAccessor(ctx, row.value, f.name, i.toString, f.dataType, f.nullable, fieldChecks)
+          codeGenAccessor(
+            ctx,
+            row.value,
+            s"st_col${i}_",
+            i.toString,
+            f.dataType,
+            f.nullable, fieldChecks)
         }
         ("", row.code, columns)
 
