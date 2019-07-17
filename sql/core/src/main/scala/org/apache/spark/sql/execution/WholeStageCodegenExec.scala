@@ -895,11 +895,19 @@ case class CollapseCodegenStages(
       // domain object can not be written into unsafe row.
       case plan if plan.output.length == 1 && plan.output.head.dataType.isInstanceOf[ObjectType] =>
         plan.withNewChildren(plan.children.map(insertWholeStageCodegen(_, isColumnar)))
+      case plan: CodegenSupport with InputRDDCodegen if supportCodegen(plan) =>
+        WholeStageCodegenExec(plan)(codegenStageCounter.incrementAndGet())
       case plan: CodegenSupport if supportCodegen(plan) =>
         WholeStageCodegenExec(
           insertInputAdapter(plan, isColumnar))(codegenStageCounter.incrementAndGet())
       case other =>
         other.withNewChildren(other.children.map(insertWholeStageCodegen(_, isColumnar)))
+    }
+  }
+
+  private def resolveParentPlan(plan: SparkPlan): SparkPlan = {
+    plan.children.filter(_.isInstanceOf[CodegenSupport]).foreach { childPlan =>
+      childPlan.asInstanceOf[CodegenSupport].pare
     }
   }
 
