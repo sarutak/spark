@@ -449,7 +449,8 @@ private[ui] class JobDataSource(
     val formattedSubmissionTime = submissionTime.map(UIUtils.formatDate).getOrElse("Unknown")
     val (lastStageName, lastStageDescription) = lastStageNameAndDescription(store, jobData)
 
-    val jobDescription = UIUtils.makeDescription(lastStageDescription, basePath, plainText = false)
+    val jobDescription = UIUtils.makeDescription(
+      jobData.description.getOrElse(lastStageDescription), basePath, plainText = false)
 
     val detailUrl = "%s/jobs/job/?id=%s".format(basePath, jobData.jobId)
 
