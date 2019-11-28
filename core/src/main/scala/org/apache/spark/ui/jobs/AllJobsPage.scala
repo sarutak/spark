@@ -71,7 +71,11 @@ private[ui] class AllJobsPage(parent: JobsTab, store: AppStatusStore) extends We
       val jobId = job.jobId
       val status = job.status
       val (_, lastStageDescription) = lastStageNameAndDescription(store, job)
-      val jobDescription = UIUtils.makeDescription(lastStageDescription, "", plainText = true).text
+      val jobDescription =
+        UIUtils.makeDescription(
+          job.description.getOrElse(lastStageDescription),
+          "",
+          plainText = true).text
 
       val submissionTime = job.submissionTime.get.getTime()
       val completionTime = job.completionTime.map(_.getTime()).getOrElse(System.currentTimeMillis())
@@ -449,7 +453,11 @@ private[ui] class JobDataSource(
     val formattedSubmissionTime = submissionTime.map(UIUtils.formatDate).getOrElse("Unknown")
     val (lastStageName, lastStageDescription) = lastStageNameAndDescription(store, jobData)
 
-    val jobDescription = UIUtils.makeDescription(lastStageDescription, basePath, plainText = false)
+    val jobDescription =
+      UIUtils.makeDescription(
+        jobData.description.getOrElse(lastStageDescription),
+        basePath,
+        plainText = false)
 
     val detailUrl = "%s/jobs/job/?id=%s".format(basePath, jobData.jobId)
 
