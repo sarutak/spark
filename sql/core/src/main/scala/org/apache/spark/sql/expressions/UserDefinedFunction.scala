@@ -17,11 +17,14 @@
 
 package org.apache.spark.sql.expressions
 
+import scala.reflect.runtime.universe.TypeTag
+
 import org.apache.spark.annotation.Stable
 import org.apache.spark.sql.Column
 import org.apache.spark.sql.catalyst.ScalaReflection
 import org.apache.spark.sql.catalyst.expressions.{Expression, ScalaUDF}
-import org.apache.spark.sql.types.{AnyDataType, DataType}
+import org.apache.spark.sql.catalyst.expressions.objects.NewInstance
+import org.apache.spark.sql.types.{AnyDataType, DataType, ObjectType, StructType}
 
 /**
  * A user-defined function. To create one, use the `udf` functions in `functions`.
@@ -98,17 +101,30 @@ private[sql] case class SparkUserDefinedFunction(
     Column(createScalaUDF(exprs.map(_.expr)))
   }
 
-  private[sql] def createScalaUDF(exprs: Seq[Expression]): ScalaUDF = {
+  private[sql] def createScalaUDF(
+      exprs: Seq[Expression],
+      typeTags: Seq[TypeTag[_]] = Seq.empty): ScalaUDF = {
     // It's possible that some of the inputs don't have a specific type(e.g. `Any`),  skip type
     // check.
     val inputTypes = inputSchemas.map(_.map(_.dataType).getOrElse(AnyDataType))
+
+    val inputsStructType = inputTypes.map(_.isInstanceOf[StructType])
+
+    val exprs2 = exprs.zip(inputsStructType).zipWithIndex.map {
+      case ((expr, false), _) => expr
+      case ((expr, true), idx) =>
+        val cls = ScalaReflection.getClassFromType(typeTags(idx).tpe)
+        NewInstance(cls, Seq(expr), ObjectType(cls), false)
+//        ScalaReflection.deserializerForType(typeTags(idx).tpe)
+    }
+
     // `ScalaReflection.Schema.nullable` is false iff the type is primitive. Also `Any` is not
     // primitive.
     val inputsPrimitive = inputSchemas.map(_.map(!_.nullable).getOrElse(false))
     ScalaUDF(
       f,
       dataType,
-      exprs,
+      exprs2,
       inputsPrimitive,
       inputTypes,
       udfName = name,

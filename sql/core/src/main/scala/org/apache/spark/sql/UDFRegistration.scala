@@ -19,7 +19,7 @@ package org.apache.spark.sql
 
 import java.lang.reflect.ParameterizedType
 
-import scala.reflect.runtime.universe.TypeTag
+import scala.reflect.runtime.universe.{typeTag, TypeTag}
 import scala.util.Try
 
 import org.apache.spark.annotation.Stable
@@ -192,7 +192,7 @@ class UDFRegistration private[sql] (functionRegistry: FunctionRegistry) extends 
     val udf = SparkUserDefinedFunction(func, dataType, inputSchemas).withName(name)
     val finalUdf = if (nullable) udf else udf.asNonNullable()
     def builder(e: Seq[Expression]) = if (e.length == 1) {
-      finalUdf.createScalaUDF(e)
+      finalUdf.createScalaUDF(e, Seq(typeTag[A1]))
     } else {
       throw new AnalysisException("Invalid number of arguments for function " + name +
         ". Expected: 1; Found: " + e.length)
