@@ -109,22 +109,25 @@ private[sql] case class SparkUserDefinedFunction(
     val inputTypes = inputSchemas.map(_.map(_.dataType).getOrElse(AnyDataType))
 
     val inputsStructType = inputTypes.map(_.isInstanceOf[StructType])
-
+/*
     val exprs2 = exprs.zip(inputsStructType).zipWithIndex.map {
       case ((expr, false), _) => expr
       case ((expr, true), idx) =>
         val cls = ScalaReflection.getClassFromType(typeTags(idx).tpe)
-        NewInstance(cls, Seq(expr), ObjectType(cls), false)
-//        ScalaReflection.deserializerForType(typeTags(idx).tpe)
+        val params = ScalaReflection.getConstructorParameters(cls)
+        val args = params.map { arg =>
+          expr.children.
+        }
+        NewInstance(cls, expr.children, ObjectType(cls), false)
     }
-
+*/
     // `ScalaReflection.Schema.nullable` is false iff the type is primitive. Also `Any` is not
     // primitive.
     val inputsPrimitive = inputSchemas.map(_.map(!_.nullable).getOrElse(false))
     ScalaUDF(
       f,
       dataType,
-      exprs2,
+      exprs,
       inputsPrimitive,
       inputTypes,
       udfName = name,
