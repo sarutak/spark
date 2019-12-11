@@ -26,7 +26,6 @@ import scala.util.Random
 
 import org.apache.spark.sql.AnalysisException
 import org.apache.spark.sql.catalyst._
-import org.apache.spark.sql.catalyst.analysis.UpdateOuterReferences.ResolveStructArguments
 import org.apache.spark.sql.catalyst.catalog._
 import org.apache.spark.sql.catalyst.encoders.OuterScopes
 import org.apache.spark.sql.catalyst.expressions._
@@ -2934,6 +2933,46 @@ class Analyzer(
       }
     }
   }
+
+  object ResolveStructArguments extends Rule[LogicalPlan] {
+    def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
+      case p if !p.childrenResolved => p
+      case p if p.resolved => p
+
+      case p => p transformExpressions {
+        case udf: ScalaUDF if udf.childrenResolved && udf.resolved =>
+          val funcClass = udf.function.getClass
+          val funcBody =
+            funcClass.getDeclaredMethods.filter(method => method.getName.startsWith("apply")).head
+          val argTypes = funcBody.getParameters.map(param => param.getType)
+
+          val newArgs = udf.children.zipWithIndex.map {
+            case (cns: CreateNamedStruct, idx) =>
+              val argType = argTypes(idx)
+              val constructorParams = ScalaReflection.getConstructorParameters(argType)
+              NewInstance(
+                argType,
+                ScalaReflection.deserializerForType(argType),
+                /*
+                constructorParams
+                  .filter(_._1 != "$outer")
+                  .map(param => ScalaReflection.deserializerForType(param._2)),
+//                  .map(expr => resolveExpressionBottomUp(expr, plan)),
+
+                 */
+                ObjectType(argType),
+                false)
+            case (other, _) => other
+          }
+          val newTypes = udf.inputTypes.zipWithIndex.map {
+            case (StructType, idx) =>
+              ObjectType(argTypes(idx))
+            case (other, _) => other
+          }
+          udf.copy(children = newArgs, inputTypes = newTypes)
+      }
+    }
+  }
 }
 
 /**
@@ -3229,35 +3268,6 @@ object UpdateOuterReferences extends Rule[LogicalPlan] {
             val outerAliases = a.aggregateExpressions collect { case a: Alias => a }
             // Update the subquery plan to record the OuterReference to point to outer query plan.
             s.withNewPlan(updateOuterReferenceInSubquery(s.plan, outerAliases))
-      }
-    }
-  }
-
-  object ResolveStructArguments extends Rule[LogicalPlan] {
-    def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
-      case p if !p.childrenResolved => p
-      case p if p.resolved => p
-
-      case p => p transformExpressions {
-        case udf: ScalaUDF if udf.childrenResolved && udf.resolved =>
-          val funcClass = udf.function.getClass
-          val funcBody =
-            funcClass.getDeclaredMethods.filter(method => method.getName.startsWith("apply")).head
-          val argTypes = funcBody.getParameters.map(param => param.getType)
-
-          val newArgs = udf.children.zipWithIndex.map {
-            case (cns: CreateNamedStruct, idx) =>
-              val argType = argTypes(idx)
-              encoders.encoderFor[]
-              NewInstance(argType, cns.nameExprs.map(ScalaReflection.deserializerForType()), ObjectType(argType), false)
-            case (other, _) => other
-          }
-          val newTypes = udf.inputTypes.zipWithIndex.map {
-            case (StructType, idx) =>
-              ObjectType(argTypes(idx))
-            case (other, _) => other
-          }
-          udf.copy(children = newArgs, inputTypes = newTypes)
       }
     }
   }
