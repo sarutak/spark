@@ -213,8 +213,8 @@ class Analyzer(
       ExtractGenerator ::
       ResolveGenerate ::
       ResolveFunctions ::
-      ResolveStructArguments::
       ResolveAliases ::
+      ResolveStructArguments::
       ResolveSubquery ::
       ResolveSubqueryColumnAliases ::
       ResolveWindowOrder ::
@@ -2937,8 +2937,43 @@ class Analyzer(
   object ResolveStructArguments extends Rule[LogicalPlan] {
     def apply(plan: LogicalPlan): LogicalPlan = plan.resolveOperatorsUp {
       case p if !p.childrenResolved => p
-      case p if p.resolved => p
+/*
+      case p =>
+        if (p.projectList.exists(_.isInstanceOf[ScalaUDF])) {
+          val newProjectList = p.projectList.map {
+            case alias @ Alias(ScalaUDF, _) if alias.udf.childrenResolved && udf.resolved =>
+              val funcClass = udf.function.getClass
+              val funcBody = funcClass
+                .getDeclaredMethods
+                .filter(method => method.getName.startsWith("apply"))
+                .head
+              val argTypes = funcBody.getParameters.map(param => param.getType)
 
+              val newArgs = udf.children.zipWithIndex.map {
+                case (cns: CreateNamedStruct, idx) =>
+                  val argType = argTypes(idx)
+                  val constructorParams = ScalaReflection.getConstructorParameters(argType)
+                  val instance = ScalaReflection.deserializerForType(
+                    ScalaReflection.mirror.classSymbol(argType).toType)
+                  resolveExpressionBottomUp(instance.transform {
+                    case If(IsNull(GetColumnByOrdinal(0, _)), _, n: NewInstance) => n
+                  }, plan)
+                case (other, _) => other
+              }
+              val newTypes = udf.inputTypes.zipWithIndex.map {
+                case (_: StructType, idx) =>
+                  ObjectType(argTypes(idx))
+                case (other, _) => other
+              }
+              val newUDF = udf.copy(children = newArgs, inputTypes = newTypes)
+            case other => other
+          }
+          Project(newProjectList, p)
+        } else {
+          p
+        }
+    }
+*/
       case p => p transformExpressions {
         case udf: ScalaUDF if udf.childrenResolved && udf.resolved =>
           val funcClass = udf.function.getClass
@@ -2950,22 +2985,29 @@ class Analyzer(
             case (cns: CreateNamedStruct, idx) =>
               val argType = argTypes(idx)
               val constructorParams = ScalaReflection.getConstructorParameters(argType)
-              NewInstance(
-                argType,
-                ScalaReflection.deserializerForType(argType),
-                /*
-                constructorParams
-                  .filter(_._1 != "$outer")
-                  .map(param => ScalaReflection.deserializerForType(param._2)),
+              val instance = ScalaReflection.deserializerForType(
+                ScalaReflection.mirror.classSymbol(argType).toType)
+              resolveExpressionBottomUp(instance.transform {
+                case If(IsNull(GetColumnByOrdinal(0, _)), _, n: NewInstance) => n
+              }, plan)
+            //              DeserializeToObject(resolved, cns)
+//              resolveExpressionBottomUp(instance, plan).transform {
+//                case If(IsNull(GetColumnByOrdinal(0, _)), _, n: NewInstance) => n
+//              }
+//              NewInstance(
+//                argType,
+//                ScalaReflection.deserializerForType(ScalaReflection.)
+//                  .deserializerForType(ScalaReflection.mirror.classSymbol(argType).typeSignature),
+//                constructorParams
+//                  .filter(_._1 != "$outer")
+//                  .map(param => ScalaReflection.deserializerForType(param._2))
 //                  .map(expr => resolveExpressionBottomUp(expr, plan)),
-
-                 */
-                ObjectType(argType),
-                false)
+//                ObjectType(argType),
+//                false)
             case (other, _) => other
           }
           val newTypes = udf.inputTypes.zipWithIndex.map {
-            case (StructType, idx) =>
+            case (_: StructType, idx) =>
               ObjectType(argTypes(idx))
             case (other, _) => other
           }
