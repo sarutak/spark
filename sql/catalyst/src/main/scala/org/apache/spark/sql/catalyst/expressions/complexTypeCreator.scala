@@ -308,7 +308,10 @@ object CreateStruct extends FunctionBuilder {
        {"a":1,"b":2,"c":3}
   """)
 // scalastyle:on line.size.limit
-case class CreateNamedStruct(children: Seq[Expression]) extends Expression {
+case class CreateNamedStruct(
+    children: Seq[Expression],
+    skipCreateStruct: Boolean = true)
+  extends Expression {
   lazy val (nameExprs, valExprs) = children.grouped(2).map {
     case Seq(name, value) => (name, value)
   }.toList.unzip
@@ -363,6 +366,7 @@ case class CreateNamedStruct(children: Seq[Expression]) extends Expression {
   override def doGenCode(ctx: CodegenContext, ev: ExprCode): ExprCode = {
     val rowClass = classOf[GenericInternalRow].getName
     val values = ctx.freshName("values")
+    val values2 = Array.tabulate(valExprs.length)(_ => ctx.freshName("values"))
     val valCodes = valExprs.zipWithIndex.map { case (e, i) =>
       val eval = e.genCode(ctx)
       s"""
@@ -374,18 +378,56 @@ case class CreateNamedStruct(children: Seq[Expression]) extends Expression {
          |}
        """.stripMargin
     }
+    val valCodes2 = valExprs.zipWithIndex.map { case(e, i) =>
+      val eval = e.genCode(ctx)
+      s"""
+         |${eval.code}
+         |if (${eval.isNull}) {
+         |  ${values2(i)} = null;
+         |} else {
+         |  ${values2(i)} = ${eval.value};
+         |}
+         |""".stripMargin
+    }
+    val types = valExprs.map(e => CodeGenerator.javaType(e.dataType))
     val valuesCode = ctx.splitExpressionsWithCurrentInputs(
       expressions = valCodes,
       funcName = "createNamedStruct",
       extraArguments = "Object[]" -> values :: Nil)
 
-    ev.copy(code =
-      code"""
-         |Object[] $values = new Object[${valExprs.size}];
-         |$valuesCode
-         |final InternalRow ${ev.value} = new $rowClass($values);
-         |$values = null;
-       """.stripMargin, isNull = FalseLiteral)
+    val valuesCode2 = ctx.splitExpressionsWithCurrentInputs(
+      expressions = valCodes2,
+      funcName = "createNamedStruct",
+      extraArguments = types.zip(values2))
+
+    if (!skipCreateStruct) {
+      ev.copy(code =
+        code"""
+           |Object[] $values = new Object[${valExprs.size}];
+           |$valuesCode
+           |final InternalRow ${ev.value} = new $rowClass($values);
+           |$values = null;
+         """.stripMargin, isNull = FalseLiteral)
+    } else {
+      val declarations = values2.zipWithIndex.map {
+        case (e, i) =>
+          s"${types(i)} $e;"
+      }.mkString("\n")
+
+      ev.copy(code =
+        code"""
+           |$declarations
+           |$valuesCode2
+           |final InternalRow ${ev.value} = new $rowClass($values2);
+           |""".stripMargin, isNull = FalseLiteral)
+      /*
+      ev.copy(code =
+        code"""
+          |$declarations
+          |final InternalRow ${ev.value} = ${ctx.currentVars(0).value};
+          |""".stripMargin, isNull = FalseLiteral)
+       */
+    }
   }
 
   override def prettyName: String = "named_struct"

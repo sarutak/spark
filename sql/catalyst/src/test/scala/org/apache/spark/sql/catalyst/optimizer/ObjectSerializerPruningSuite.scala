@@ -90,7 +90,7 @@ class ObjectSerializerPruningSuite extends PlanTest {
       val optimized = Optimize.execute(query.analyze)
 
       val prunedSerializer = serializerObject.serializer.head.transformDown {
-        case CreateNamedStruct(children) =>
+        case CreateNamedStruct(children, _) =>
           CreateNamedStruct(children.take(2))
       }.transformUp {
         // Aligns null literal in `If` expression to make it resolvable.
