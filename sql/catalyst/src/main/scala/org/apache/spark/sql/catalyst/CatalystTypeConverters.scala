@@ -29,6 +29,7 @@ import scala.language.existentials
 
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.catalyst.expressions._
+import org.apache.spark.sql.catalyst.expressions.codegen.GenerateStructConverter
 import org.apache.spark.sql.catalyst.util._
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
@@ -431,8 +432,13 @@ object CatalystTypeConverters {
    * Typical use case would be converting a collection of rows that have the same schema. You will
    * call this function once to get a converter, and apply it to every row.
    */
-  def createToScalaConverter(dataType: DataType): Any => Any = {
-    if (isPrimitive(dataType)) {
+  def createToScalaConverter(dataType: DataType, cls: Option[Class[_]] = None): Any => Any = {
+    if (dataType.isInstanceOf[StructType] && cls.isDefined) {
+      println("hogehoge")
+      // getConverterForType(dataType).toScala
+      val x = GenerateStructConverter.generate(cls.get)
+      x.toScala
+    } else if (isPrimitive(dataType)) {
       identity
     } else {
       getConverterForType(dataType).toScala

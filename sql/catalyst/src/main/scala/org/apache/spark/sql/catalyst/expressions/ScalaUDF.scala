@@ -986,9 +986,13 @@ case class ScalaUDF(
       ev: ExprCode): ExprCode = {
     val converterClassName = classOf[Any => Any].getName
 
+    val func = function.getClass.getDeclaredMethods.filter(_.getName.startsWith("apply")).head
+    val funcParam = func.getParameterTypes
+
     // The type converters for inputs and the result.
-    val converters: Array[Any => Any] = children.map { c =>
-      CatalystTypeConverters.createToScalaConverter(c.dataType)
+    val converters: Array[Any => Any] = children.zip(funcParam).map {
+      case (c, p) =>
+        CatalystTypeConverters.createToScalaConverter(c.dataType, Option(p))
     }.toArray :+ CatalystTypeConverters.createToCatalystConverter(dataType)
     val convertersTerm = ctx.addReferenceObj("converters", converters, s"$converterClassName[]")
     val errorMsgTerm = ctx.addReferenceObj("errMsg", udfErrorMessage)
