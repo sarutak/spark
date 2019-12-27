@@ -992,7 +992,7 @@ case class ScalaUDF(
     // The type converters for inputs and the result.
     val converters: Array[Any => Any] = children.zip(funcParam).map {
       case (c, p) =>
-        CatalystTypeConverters.createToScalaConverter(c.dataType, Option(p))
+        CatalystTypeConverters.createToScalaConverter(c.dataType, Option(p, ctx))
     }.toArray :+ CatalystTypeConverters.createToCatalystConverter(dataType)
     val convertersTerm = ctx.addReferenceObj("converters", converters, s"$converterClassName[]")
     val errorMsgTerm = ctx.addReferenceObj("errMsg", udfErrorMessage)

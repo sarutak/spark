@@ -17,16 +17,19 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen
 
-import org.apache.spark.sql.catalyst.expressions.{Attribute, BindReferences, Expression, StructConverter}
+import org.apache.spark.sql.catalyst.CatalystTypeConverters.CatalystTypeConverter
+import org.apache.spark.sql.catalyst.expressions.Attribute
 
-object GenerateStructConverter extends CodeGenerator[Class[_], StructConverter] {
+object GenerateStructConverter
+  // extends CodeGenerator[Class[_], CatalystTypeConverter[Any, Any, Any]] {
+  extends CodeGenerator[Class[_], Any => Any] {
 
   protected def bind(in: Class[_], inputSchema: Seq[Attribute]): Class[_] = in
   //  BindReferences.bindReference(in, inputSchema)
 
   protected def canonicalize(in: Class[_]): Class[_] = in // ExpressionCanonicalizer.execute(in)
 
-  protected def create(in: Class[_]): StructConverter = {
+  protected def create(in: Class[_]): Any => Any = {
     val ctx = newCodeGenContext()
 //    val eval = in.genCode(ctx)
 
@@ -34,22 +37,71 @@ object GenerateStructConverter extends CodeGenerator[Class[_], StructConverter] 
 //      new CodeAndComment(codeBody, ctx.getPlaceHolderToComments()))
 //    logDebug(s"Generated predicate '$predicate':\n${CodeFormatter.format(code)}")
 
+    // scalastyle:off
     val codeBody =
       s"""
         |public java.lang.Object generate(Object[] references) {
         |  return new SpecificStructConverter();
         |}
         |
-        |static class SpecificStructConverter extends ${classOf[StructConverter].getName} {
+        |public static class SpecificStructConverter extends ${classOf[CatalystTypeConverter[_, _, _]].getName} {
         |  public Object toScala(Object in) {
         |    InternalRow row = (InternalRow)in;
         |    return "Hello";
         |  }
+        |
+        |  InternalRow toCatalystImpl(Object scalaValue) {
+        |    throw new UnsupportedOperationException();
+        |  }
+        |
+        |  Object toScalaImpl(InternalRow in, int column) {
+        |    InternalRow row = (InternalRow)in;
+        |    throw new UnsupportedOperationException();
+        |  }
+        |  public Object apply(InternalRow row) {
+        |    return "Hello";
+        |  }
+        |
+        |//  public Object apply(final Object obj) {
+        |//    return apply((InternalRow)obj);
+        |//  }
         |}
         |""".stripMargin
+    // scalastyle:on
     val code = CodeFormatter.stripOverlappingComments(
       new CodeAndComment(codeBody, ctx.getPlaceHolderToComments()))
     val (clazz, _) = CodeGenerator.compile(code)
-    clazz.generate(null).asInstanceOf[StructConverter]
+    val f = clazz.generate(null).asInstanceOf[CatalystTypeConverter[Any, Any, Any]]
+    f.getClass.getDeclaredMethods.foreach(println)
+    // clazz.generate(null).asInstanceOf
+    // new ConverterWrapper(f).toScala
+    // val x = 10
+    // ((s: String) => s * x).asInstanceOf[Any => Any]
+    // ((s: String) => s.toString).asInstanceOf[Any => Any]
+    // (new Fuga.Hoge().func _).asInstanceOf[Any => Any]
+    // ((s: Double) => java.lang.Math.abs(s)).asInstanceOf[Any => Any]
+    import java.io._
+    val output = new ObjectOutputStream(new FileOutputStream("/tmp/test.obj"))
+    output.writeObject(f)
+    output.close()
+
+    val input = new ObjectInputStream(new FileInputStream("/tmp/test.obj"))
+    input.readObject()
+    input.close()
+
+     val piyo = new Piyo
+     val fuga = new piyo.Fuga
+     val hoge = new fuga.Hoge
+     (hoge.func _).asInstanceOf[Any => Any]
+  }
+}
+
+class Piyo extends Serializable {
+
+  class Fuga extends Serializable {
+
+    class Hoge extends Serializable {
+      def func(s: String): String = s.toString
+    }
   }
 }

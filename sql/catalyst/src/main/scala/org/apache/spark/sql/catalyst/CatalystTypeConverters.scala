@@ -29,11 +29,12 @@ import scala.language.existentials
 
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.catalyst.expressions._
-import org.apache.spark.sql.catalyst.expressions.codegen.GenerateStructConverter
+import org.apache.spark.sql.catalyst.expressions.codegen.CodegenContext
 import org.apache.spark.sql.catalyst.util._
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
+import org.apache.spark.util.Utils
 
 /**
  * Functions to convert Scala types to Catalyst types and vice versa.
@@ -87,7 +88,7 @@ object CatalystTypeConverters {
    * @tparam ScalaOutputType The type of Scala values returned when converting Catalyst to Scala.
    * @tparam CatalystType The internal Catalyst type used to represent values of this Scala type.
    */
-  private abstract class CatalystTypeConverter[ScalaInputType, ScalaOutputType, CatalystType]
+  private[sql] abstract class CatalystTypeConverter[ScalaInputType, ScalaOutputType, CatalystType]
     extends Serializable {
 
     /**
@@ -287,6 +288,42 @@ object CatalystTypeConverters {
       toScala(row.getStruct(column, structType.size))
   }
 
+  private case class SpecificStructConverterWrapper(structType: StructType, implClassName: String)
+    extends CatalystTypeConverter[Any, Any, InternalRow] {
+
+    @transient var impl: CatalystTypeConverter[Any, Any, InternalRow] = _
+    @transient var initialized = false
+
+    def initialize(): Unit = {
+      val cls = Utils.classForName(implClassName)
+      val constructor = cls.getConstructor(classOf[StructType])
+      impl = constructor.newInstance(structType)
+      initialized = true
+
+    }
+
+    override def toScala(obj: InternalRow): Any = {
+      if (!initialized) {
+        initialize()
+      }
+      null
+    }
+
+    override def toCatalystImpl(obj: Any): InternalRow = {
+      if (!initialized) {
+        initialize()
+      }
+      null
+    }
+
+    override def toScalaImpl(row: InternalRow, column: Int): Any = {
+      if (!initialized) {
+        initialize()
+      }
+      null
+    }
+  }
+
   private object StringConverter extends CatalystTypeConverter[Any, String, UTF8String] {
     override def toCatalystImpl(scalaValue: Any): UTF8String = scalaValue match {
       case str: String => UTF8String.fromString(str)
@@ -432,12 +469,50 @@ object CatalystTypeConverters {
    * Typical use case would be converting a collection of rows that have the same schema. You will
    * call this function once to get a converter, and apply it to every row.
    */
-  def createToScalaConverter(dataType: DataType, cls: Option[Class[_]] = None): Any => Any = {
-    if (dataType.isInstanceOf[StructType] && cls.isDefined) {
-      println("hogehoge")
+  def createToScalaConverter(
+      dataType: DataType,
+      clsAndCxt: Option[(Class[_], CodegenContext)] = None): Any => Any = {
+    if (dataType.isInstanceOf[StructType] && clsAndCxt.isDefined) {
+      val (cls, cxt) = clsAndCxt.get
+      val generatedClassName =
+        cxt.freshName("org.apache.spark.sql.expression.GeneratedClass.SpecificStructConverter")
+      val shortClassName = generatedClassName.split("\\.").last
       // getConverterForType(dataType).toScala
-      val x = GenerateStructConverter.generate(cls.get)
-      x.toScala
+      // val x = GenerateStructConverter.generate(cls.get)
+      // x.toScala
+      // x
+      // scalastyle:off
+      val codeBody =
+      s"""
+         |public static class ${shortClassName} extends ${classOf[CatalystTypeConverter[_, _, _]].getName} {
+         |  public Object toScala(Object in) {
+         |    InternalRow row = (InternalRow)in;
+         |    return "Hello";
+         |  }
+         |
+         |  InternalRow toCatalystImpl(Object scalaValue) {
+         |    throw new UnsupportedOperationException();
+         |  }
+         |
+         |  Object toScalaImpl(InternalRow in, int column) {
+         |    InternalRow row = (InternalRow)in;
+         |    throw new UnsupportedOperationException();
+         |  }
+         |  public Object apply(InternalRow row) {
+         |    return "Hello";
+         |  }
+         |
+         |//  public Object apply(final Object obj) {
+         |//    return apply((InternalRow)obj);
+         |//  }
+         |}
+         |""".stripMargin
+      // scalastyle:on
+
+      cxt.addInnerClass(codeBody)
+      val wrapper =
+        SpecificStructConverterWrapper(dataType.asInstanceOf[StructType], generatedClassName)
+      (wrapper.toScala _).asInstanceOf[Any => Any]
     } else if (isPrimitive(dataType)) {
       identity
     } else {
