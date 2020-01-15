@@ -216,7 +216,9 @@ class HadoopMapRedWriteConfigUtil[K, V: ClassTag](conf: SerializableJobConf)
     numfmt.setMinimumIntegerDigits(5)
     numfmt.setGroupingUsed(false)
 
-    val outputName = "part-" + numfmt.format(splitId)
+    val conf = taskContext.getConfiguration
+    val prefix = conf.get("spark.output.basename", "part")
+    val outputName = s"$prefix-" + numfmt.format(splitId)
     val path = FileOutputFormat.getOutputPath(getConf)
     val fs: FileSystem = {
       if (path != null) {
