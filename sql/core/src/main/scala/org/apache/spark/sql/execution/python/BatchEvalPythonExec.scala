@@ -66,8 +66,14 @@ case class BatchEvalPythonExec(udfs: Seq[PythonUDF], resultAttrs: Seq[Attribute]
     }.grouped(100).map(x => pickle.dumps(x.toArray))
 
     // Output iterator for results from Python.
-    val outputIterator = new PythonUDFRunner(funcs, PythonEvalType.SQL_BATCHED_UDF, argOffsets)
-      .compute(inputIterator, context.partitionId(), context)
+    val outputIterator =
+      if (context.getLocalProperty("spark.pyspark.pygraaludf.enabled") == "true") {
+        new PyGraalUDFEvaluator(funcs, PythonEvalType.SQL_BATCHED_UDF, argOffsets)
+          .compute(inputIterator, context.partitionId(), context)
+      } else {
+        new PythonUDFRunner(funcs, PythonEvalType.SQL_BATCHED_UDF, argOffsets)
+          .compute(inputIterator, context.partitionId(), context)
+      }
 
     val unpickle = new Unpickler
     val mutableRow = new GenericInternalRow(1)

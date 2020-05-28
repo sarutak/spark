@@ -1195,6 +1195,8 @@ private[spark] class DAGScheduler(
     }
     pysparkMem.map(mem => properties.setProperty(PYSPARK_MEMORY_LOCAL_PROPERTY, mem.toString))
     execCores.map(cores => properties.setProperty(EXECUTOR_CORES_LOCAL_PROPERTY, cores))
+    properties.setProperty("spark.pyspark.pygraaludf.enabled",
+      sc.conf.getBoolean("spark.pyspark.pygraaludf.enabled", false).toString)
   }
 
   /** Called when stage's parents are available and we can now do its task. */

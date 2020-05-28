@@ -283,7 +283,7 @@ def read_single_udf(pickleSer, infile, eval_type, runner_conf, udf_index):
         return arg_offsets, wrap_window_agg_pandas_udf(func, return_type, runner_conf, udf_index)
     elif eval_type == PythonEvalType.SQL_BATCHED_UDF:
         return arg_offsets, wrap_udf(func, return_type)
-    else:
+   else:
         raise ValueError("Unknown eval type: {}".format(eval_type))
 
 
