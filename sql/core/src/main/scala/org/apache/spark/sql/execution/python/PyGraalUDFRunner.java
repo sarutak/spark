@@ -22,7 +22,7 @@ import org.graalvm.polyglot.*;
 public class PyGraalUDFRunner {
     public int run(Value func, Object[] args) {
         Value result = func.execute(args);
-        System.out.println(result.asInt());
+//        System.out.println(result.asInt());
         return result.asInt();
     }
 }

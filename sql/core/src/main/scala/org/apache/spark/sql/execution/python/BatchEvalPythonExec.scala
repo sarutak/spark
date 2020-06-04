@@ -17,14 +17,12 @@
 
 package org.apache.spark.sql.execution.python
 
-import java.io.File
-
 import scala.collection.JavaConverters._
 
 import net.razorvine.pickle.{Pickler, Unpickler}
 import org.graalvm.polyglot._
 
-import org.apache.spark.{InterruptibleIterator, TaskContext}
+import org.apache.spark.{GraalEnv, InterruptibleIterator, TaskContext}
 import org.apache.spark.api.python.{ChainedPythonFunctions, PythonEvalType}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions._
@@ -72,17 +70,30 @@ case class BatchEvalPythonExec(udfs: Seq[PythonUDF], resultAttrs: Seq[Attribute]
     if (context.getLocalProperty("spark.pyspark.pygraaludf.enabled") == "true") {
       val bytes = funcs(0).funcs(0).command.map(value => Integer.toUnsignedLong(value) & 0xff)
       // val graalContext = Context.newBuilder().allowAllAccess(true).build
-      val graalContext = GraalEnv.graalContext.get()
+      var start = System.currentTimeMillis()
+      val graalContext = GraalEnv.graalContext // .get()
+      graalContext.enter()
+      var end = System.currentTimeMillis()
+      // scalastyle:off
+      println("Get Context: " + (end - start) + "ms")
       import org.apache.spark.api.python.PythonUtils
       // scalastyle:off
       // println(PythonUtils.sparkPythonPath)
 
+      start = System.currentTimeMillis()
       val test_udf = graalContext.eval("python", "graalrunner.test_udf")
+      graalContext.leave()
+      end = System.currentTimeMillis()
+      println("Get function(test_udf): " + (end - start) + "ms")
+      start = System.currentTimeMillis()
       val func = test_udf.execute(bytes)
+      end = System.currentTimeMillis()
+      println("Get function(myfunc): " + (end - start) + "ms")
       val runner = new PyGraalUDFRunner()
       val args = new Array[Object](argOffsets(0).size)
 
-      graalContext.enter()
+      start = System.currentTimeMillis()
+//      graalContext.enter()
       val mutableRow = new GenericInternalRow(1)
       val outputIterator = iter.map { row =>
         var i = 0;
@@ -97,7 +108,9 @@ case class BatchEvalPythonExec(udfs: Seq[PythonUDF], resultAttrs: Seq[Attribute]
         mutableRow
       }
 
-      graalContext.leave()
+//      graalContext.leave()
+      end = System.currentTimeMillis()
+      println("Execute function: " + (end - start) + "ms")
       new InterruptibleIterator[InternalRow](context, outputIterator)
 
 //        val graalContext = SparkEnv.get.graalContext.get

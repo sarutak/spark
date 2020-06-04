@@ -16,10 +16,11 @@
 #
 
 from pyspark.broadcast import Broadcast
-from pyspark.rdd import PythonEvalType
-from pyspark.serializers import write_with_length, write_int, read_long, read_bool, \
-    write_long, read_int, SpecialLengths, UTF8Deserializer, PickleSerializer, \
-    BatchedSerializer
+# from pyspark.rdd import PythonEvalType
+#from pyspark.serializers import write_with_length, write_int, read_long, read_bool, \
+#    write_long, read_int, SpecialLengths, UTF8Deserializer, PickleSerializer, \
+#    BatchedSerializer
+from pyspark.serializers import PickleSerializer
 
 pickleSer = PickleSerializer()
 

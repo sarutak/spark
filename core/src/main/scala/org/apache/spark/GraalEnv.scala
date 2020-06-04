@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.sql.execution.python
+package org.apache.spark
 
 import java.io.File
 
@@ -25,19 +25,30 @@ import org.apache.spark.api.python.PythonUtils
 
 object GraalEnv {
   val engine = Engine.create
-  val graalContext = new ThreadLocal[Context] {
-    override def initialValue(): Context = {
+  // val graalContext = new ThreadLocal[Context] {
+  val graalContext = {
+//    override def initialValue(): Context = {
       val context = Context.newBuilder().allowAllAccess(true).engine(engine).build
       context.enter()
       val paths = PythonUtils.sparkPythonPath.split(File.pathSeparator)
         .map(path => "'" + path + "'").mkString("[", ",", "]")
+      var start = System.currentTimeMillis()
       context.eval("python", "import sys")
+      var end = System.currentTimeMillis()
+      // scalastyle:off
+      println("import sys: " + (end - start) + "ms")
+      start = System.currentTimeMillis()
       context.eval("python", s"sys.path.extend($paths)")
+      end = System.currentTimeMillis()
+      println("sys.path.extend: " + (end - start) + "ms")
 //      context.eval("python", "import pyspark")
+      start = System.currentTimeMillis()
       context.eval("python", "from pyspark import graalrunner")
+      end = System.currentTimeMillis()
+      println("from pyspark import graalrunner: " + (end - start) + "ms")
 //      context.eval("python", "print('hogehogehogehoge')")
       context.leave()
       context
-    }
+//    }
   }
 }
