@@ -15,33 +15,14 @@
  * limitations under the License.
  */
 
-package org.apache.spark.sql.execution.python
+package org.apache.spark.sql.execution.python;
 
-import org.apache.spark.{InterruptibleIterator, TaskContext}
-import org.apache.spark.api.python.ChainedPythonFunctions
+import org.graalvm.polyglot.*;
 
-class PyGraalUDFEvaluator(
-    funcs: Seq[ChainedPythonFunctions],
-    evalType: Int,
-    argOffsets: Array[Array[Int]]) {
-  def compute(
-      inputIterator: Iterator[Array[Byte]],
-      partitionIndex: Int,
-      context: TaskContext): Iterator[Array[Byte]] = {
-
-    // scalastyle:off
-    // println("fugafuga" * 100)
-    val resultIterator = new Iterator[Array[Byte]] {
-      override def hasNext(): Boolean = {
-        inputIterator.hasNext
-      }
-
-      override def next(): Array[Byte] = {
-        new Array[Byte](1)
-      }
-
+public class PyGraalUDFRunner {
+    public int run(Value func, Object[] args) {
+        Value result = func.execute(args);
+        System.out.println(result.asInt());
+        return result.asInt();
     }
-    new InterruptibleIterator(context, resultIterator)
-    Iterator(Array(1.asInstanceOf[Byte]))
-  }
 }

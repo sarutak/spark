@@ -17,31 +17,27 @@
 
 package org.apache.spark.sql.execution.python
 
-import org.apache.spark.{InterruptibleIterator, TaskContext}
-import org.apache.spark.api.python.ChainedPythonFunctions
+import java.io.File
 
-class PyGraalUDFEvaluator(
-    funcs: Seq[ChainedPythonFunctions],
-    evalType: Int,
-    argOffsets: Array[Array[Int]]) {
-  def compute(
-      inputIterator: Iterator[Array[Byte]],
-      partitionIndex: Int,
-      context: TaskContext): Iterator[Array[Byte]] = {
+import org.graalvm.polyglot._
 
-    // scalastyle:off
-    // println("fugafuga" * 100)
-    val resultIterator = new Iterator[Array[Byte]] {
-      override def hasNext(): Boolean = {
-        inputIterator.hasNext
-      }
+import org.apache.spark.api.python.PythonUtils
 
-      override def next(): Array[Byte] = {
-        new Array[Byte](1)
-      }
-
+object GraalEnv {
+  val engine = Engine.create
+  val graalContext = new ThreadLocal[Context] {
+    override def initialValue(): Context = {
+      val context = Context.newBuilder().allowAllAccess(true).engine(engine).build
+      context.enter()
+      val paths = PythonUtils.sparkPythonPath.split(File.pathSeparator)
+        .map(path => "'" + path + "'").mkString("[", ",", "]")
+      context.eval("python", "import sys")
+      context.eval("python", s"sys.path.extend($paths)")
+//      context.eval("python", "import pyspark")
+      context.eval("python", "from pyspark import graalrunner")
+//      context.eval("python", "print('hogehogehogehoge')")
+      context.leave()
+      context
     }
-    new InterruptibleIterator(context, resultIterator)
-    Iterator(Array(1.asInstanceOf[Byte]))
   }
 }

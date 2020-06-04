@@ -2527,7 +2527,10 @@ class RDD(object):
 
 def _prepare_for_python_RDD(sc, command):
     # the serialized command will be compressed by broadcast
-    ser = CloudPickleSerializer()
+    if sc.getConf().get("spark.pyspark.pygraaludf.enabled") == "true":
+        ser = PickleSerializer()
+    else:
+        ser = CloudPickleSerializer()
     pickled_command = ser.dumps(command)
     if len(pickled_command) > sc._jvm.PythonUtils.getBroadcastThreshold(sc._jsc):  # Default 1M
         # The broadcast will have same life cycle as created PythonRDD

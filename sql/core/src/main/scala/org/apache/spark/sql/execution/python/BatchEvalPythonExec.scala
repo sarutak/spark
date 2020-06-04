@@ -17,11 +17,14 @@
 
 package org.apache.spark.sql.execution.python
 
+import java.io.File
+
 import scala.collection.JavaConverters._
 
 import net.razorvine.pickle.{Pickler, Unpickler}
+import org.graalvm.polyglot._
 
-import org.apache.spark.TaskContext
+import org.apache.spark.{InterruptibleIterator, TaskContext}
 import org.apache.spark.api.python.{ChainedPythonFunctions, PythonEvalType}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions._
@@ -66,35 +69,66 @@ case class BatchEvalPythonExec(udfs: Seq[PythonUDF], resultAttrs: Seq[Attribute]
     }.grouped(100).map(x => pickle.dumps(x.toArray))
 
     // Output iterator for results from Python.
-    val outputIterator =
-      if (context.getLocalProperty("spark.pyspark.pygraaludf.enabled") == "true") {
-        new PyGraalUDFEvaluator(funcs, PythonEvalType.SQL_BATCHED_UDF, argOffsets)
-          .compute(inputIterator, context.partitionId(), context)
-      } else {
-        new PythonUDFRunner(funcs, PythonEvalType.SQL_BATCHED_UDF, argOffsets)
-          .compute(inputIterator, context.partitionId(), context)
-      }
+    if (context.getLocalProperty("spark.pyspark.pygraaludf.enabled") == "true") {
+      val bytes = funcs(0).funcs(0).command.map(value => Integer.toUnsignedLong(value) & 0xff)
+      // val graalContext = Context.newBuilder().allowAllAccess(true).build
+      val graalContext = GraalEnv.graalContext.get()
+      import org.apache.spark.api.python.PythonUtils
+      // scalastyle:off
+      // println(PythonUtils.sparkPythonPath)
 
-    val unpickle = new Unpickler
-    val mutableRow = new GenericInternalRow(1)
-    val resultType = if (udfs.length == 1) {
-      udfs.head.dataType
-    } else {
-      StructType(udfs.map(u => StructField("", u.dataType, u.nullable)))
-    }
+      val test_udf = graalContext.eval("python", "graalrunner.test_udf")
+      val func = test_udf.execute(bytes)
+      val runner = new PyGraalUDFRunner()
+      val args = new Array[Object](argOffsets(0).size)
 
-    val fromJava = EvaluatePython.makeFromJava(resultType)
-
-    outputIterator.flatMap { pickedResult =>
-      val unpickledBatch = unpickle.loads(pickedResult)
-      unpickledBatch.asInstanceOf[java.util.ArrayList[Any]].asScala
-    }.map { result =>
-      if (udfs.length == 1) {
-        // fast path for single UDF
+      graalContext.enter()
+      val mutableRow = new GenericInternalRow(1)
+      val outputIterator = iter.map { row =>
+        var i = 0;
+        while (i < args.size) {
+          val idx = argOffsets(0)(i)
+          args(i) = row.get(idx, dataTypes(idx))
+          i += 1
+        }
+        val result = runner.run(func, args);
+        val fromJava = EvaluatePython.makeFromJava(udfs.head.dataType)
         mutableRow(0) = fromJava(result)
         mutableRow
+      }
+
+      graalContext.leave()
+      new InterruptibleIterator[InternalRow](context, outputIterator)
+
+//        val graalContext = SparkEnv.get.graalContext.get
+        // val file = new File("graalrunner.py")
+        // val source = Source.newBuilder("python", file).build
+        // context.eval(source)
+    } else {
+      val outputIterator = new PythonUDFRunner(funcs, PythonEvalType.SQL_BATCHED_UDF, argOffsets)
+        .compute(inputIterator, context.partitionId(), context)
+
+      val unpickle = new Unpickler
+      val mutableRow = new GenericInternalRow(1)
+      val resultType = if (udfs.length == 1) {
+        udfs.head.dataType
       } else {
-        fromJava(result).asInstanceOf[InternalRow]
+        StructType(udfs.map(u => StructField("", u.dataType, u.nullable)))
+      }
+
+      val fromJava = EvaluatePython.makeFromJava(resultType)
+
+      outputIterator.flatMap { pickedResult =>
+        val unpickledBatch = unpickle.loads(pickedResult)
+        unpickledBatch.asInstanceOf[java.util.ArrayList[Any]].asScala
+      }.map { result =>
+        if (udfs.length == 1) {
+          // fast path for single UDF
+          mutableRow(0) = fromJava(result)
+          mutableRow
+        } else {
+          fromJava(result).asInstanceOf[InternalRow]
+        }
       }
     }
   }

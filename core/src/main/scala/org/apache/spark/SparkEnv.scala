@@ -28,6 +28,7 @@ import scala.util.Properties
 
 import com.google.common.cache.CacheBuilder
 import org.apache.hadoop.conf.Configuration
+import org.graalvm.polyglot._
 
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.api.python.PythonWorkerFactory
@@ -437,22 +438,6 @@ object SparkEnv extends Logging {
     if (isDriver) {
       val sparkFilesDir = Utils.createTempDir(Utils.getLocalDir(conf), "userFiles").getAbsolutePath
       envInstance.driverTmpDir = Some(sparkFilesDir)
-    }
-
-    if (!isDriver) {
-      import org.graalvm.polyglot._
-      val context = Context.newBuilder().allowAllAccess(true).build
-      import org.apache.spark.api.python.PythonUtils
-      context.enter
-      context.eval("python", "import sys")
-      // scalastyle:off
-      // println(PythonUtils.sparkPythonPath)
-      val paths = PythonUtils.sparkPythonPath.split(File.pathSeparator)
-        .map(path => "'" + path + "'").mkString("[", ",", "]")
-      context.eval("python", s"sys.path.extend($paths)")
-      context.eval("python", "import pyspark")
-      // context.eval("python", "print('hogehogehogehoge')")
-      context.leave
     }
 
     envInstance
