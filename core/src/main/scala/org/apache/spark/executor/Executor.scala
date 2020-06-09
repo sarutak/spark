@@ -71,7 +71,7 @@ private[spark] class Executor(
   logInfo(s"Starting executor ID $executorId on host $executorHostname")
 
   // To avoid releasing code cache.
-  val graalContext = GraalEnv.graalContext // .get()
+  val graalContext = GraalEnv.graalContext
 
   private val executorShutdown = new AtomicBoolean(false)
   ShutdownHookManager.addShutdownHook(
@@ -112,7 +112,6 @@ private[spark] class Executor(
       .setThreadFactory((r: Runnable) => new UninterruptibleThread(r, "unused"))
       .build()
     Executors.newCachedThreadPool(threadFactory).asInstanceOf[ThreadPoolExecutor]
-    // Executors.newFixedThreadPool(1, threadFactory).asInstanceOf[ThreadPoolExecutor]
   }
   private val executorSource = new ExecutorSource(threadPool, executorId)
   // Pool used for threads that supervise task killing / cancellation
