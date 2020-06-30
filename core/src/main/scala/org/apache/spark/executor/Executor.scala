@@ -70,9 +70,6 @@ private[spark] class Executor(
 
   logInfo(s"Starting executor ID $executorId on host $executorHostname")
 
-  // To avoid releasing code cache.
-  val graalContext = GraalEnv.graalContext
-
   private val executorShutdown = new AtomicBoolean(false)
   ShutdownHookManager.addShutdownHook(
     () => stop()
@@ -229,6 +226,15 @@ private[spark] class Executor(
   heartbeater.start()
 
   metricsPoller.start()
+
+
+  // GraalVM's context is needed to be initialized after heartbeat to avoid heartbeat timeout.
+  val isPygraalUdfEnabled = conf.getBoolean("spark.pyspark.pygraaludf.enabled", false)
+  if (isPygraalUdfEnabled) {
+    // val numCores = conf.getInt(EXECUTOR_CORES.key, EXECUTOR_CORES.defaultValue.get)
+    val numCores = 12
+    GraalEnv.initializeContextPool(numCores)
+  }
 
   private[executor] def numRunningTasks: Int = runningTasks.size()
 
@@ -420,6 +426,9 @@ private[spark] class Executor(
       var taskStarted: Boolean = false
 
       try {
+        if (isPygraalUdfEnabled) {
+          GraalEnv.graalContext.set(GraalEnv.contextPool.poll())
+        }
         // Must be set before updateDependencies() is called, in case fetching dependencies
         // requires access to properties contained within (e.g. for access control).
         Executor.taskDeserializationProps.set(taskDescription.properties)
@@ -686,6 +695,9 @@ private[spark] class Executor(
             uncaughtExceptionHandler.uncaughtException(Thread.currentThread(), t)
           }
       } finally {
+        if (isPygraalUdfEnabled) {
+          GraalEnv.contextPool.offer(GraalEnv.graalContext.get())
+        }
         runningTasks.remove(taskId)
         if (taskStarted) {
           // This means the task was successfully deserialized, its stageId and stageAttemptId
