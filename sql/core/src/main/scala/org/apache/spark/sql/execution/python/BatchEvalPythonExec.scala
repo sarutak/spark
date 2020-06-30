@@ -68,51 +68,58 @@ case class BatchEvalPythonExec(udfs: Seq[PythonUDF], resultAttrs: Seq[Attribute]
 
     // Output iterator for results from Python.
     if (context.getLocalProperty("spark.pyspark.pygraaludf.enabled") == "true") {
-      val bytes = funcs(0).funcs(0).command.map(value => Integer.toUnsignedLong(value) & 0xff)
+      val bytes =
+        funcs(0).funcs(0).command.map(value => Integer.toUnsignedLong(value) & 0xff).toArray
       // val graalContext = Context.newBuilder().allowAllAccess(true).build
       var start = System.currentTimeMillis()
+      var end = 0L
       val graalContext = GraalEnv.graalContext // .get()
-      graalContext.enter()
-      var end = System.currentTimeMillis()
-      // scalastyle:off
-      println("Get Context: " + (end - start) + "ms")
-      import org.apache.spark.api.python.PythonUtils
-      // scalastyle:off
-      // println(PythonUtils.sparkPythonPath)
+      var test_udf: Value = null
+      var func: Value = null
+      var outputIterator: Iterator[InternalRow] = null
+      GraalEnv.synchronized {
+        graalContext.enter()
+        end = System.currentTimeMillis()
+        // scalastyle:off
+        println("Get Context: " + (end - start) + "ms")
+        import org.apache.spark.api.python.PythonUtils
+        // scalastyle:off
+        // println(PythonUtils.sparkPythonPath)
 
-      start = System.currentTimeMillis()
-      val test_udf = graalContext.eval("python", "graalrunner.test_udf")
-      graalContext.leave()
-      end = System.currentTimeMillis()
-      println("Get function(test_udf): " + (end - start) + "ms")
-      start = System.currentTimeMillis()
-      val func = test_udf.execute(bytes)
-      end = System.currentTimeMillis()
-      println("Get function(myfunc): " + (end - start) + "ms")
-      val runner = new PyGraalUDFRunner()
-      val args = new Array[Object](argOffsets(0).size)
+        start = System.currentTimeMillis()
+        test_udf = graalContext.eval("python", "graalrunner.test_udf")
+        end = System.currentTimeMillis()
 
-      start = System.currentTimeMillis()
-//      graalContext.enter()
-      val mutableRow = new GenericInternalRow(1)
-      val outputIterator = iter.map { row =>
-        var i = 0;
-        while (i < args.size) {
-          val idx = argOffsets(0)(i)
-          args(i) = row.get(idx, dataTypes(idx))
-          i += 1
+        println("Get function(test_udf): " + (end - start) + "ms")
+        start = System.currentTimeMillis()
+        func = test_udf.execute(bytes)
+
+        end = System.currentTimeMillis()
+        println("Get function(myfunc): " + (end - start) + "ms")
+        val runner = new PyGraalUDFRunner()
+        val args = new Array[Object](argOffsets(0).size)
+
+        start = System.currentTimeMillis()
+        //      graalContext.enter()
+        val mutableRow = new GenericInternalRow(1)
+        outputIterator = iter.map { row =>
+          var i = 0
+          while (i < args.size) {
+            val idx = argOffsets(0)(i)
+            args(i) = row.get(idx, dataTypes(idx))
+            i += 1
+          }
+          val result = runner.run(func, args)
+          val fromJava = EvaluatePython.makeFromJava(udfs.head.dataType)
+          mutableRow(0) = fromJava(result)
+          mutableRow
         }
-        val result = runner.run(func, args);
-        val fromJava = EvaluatePython.makeFromJava(udfs.head.dataType)
-        mutableRow(0) = fromJava(result)
-        mutableRow
+        graalContext.leave()
       }
-
-//      graalContext.leave()
+        //      graalContext.leave()
       end = System.currentTimeMillis()
       println("Execute function: " + (end - start) + "ms")
       new InterruptibleIterator[InternalRow](context, outputIterator)
-
 //        val graalContext = SparkEnv.get.graalContext.get
         // val file = new File("graalrunner.py")
         // val source = Source.newBuilder("python", file).build
