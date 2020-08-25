@@ -845,10 +845,13 @@ private[spark] class Client(
       val pythonPathExecutorEnv = (sparkConf.getExecutorEnv.toMap.get("PYTHONPATH") ++
         pythonPathList).mkString(ApplicationConstants.CLASS_PATH_SEPARATOR)
       sparkConf.setExecutorEnv("PYTHONPATH", pythonPathExecutorEnv)
+      val pythonUserBaseExecutorEnv = sparkConf.getExecutorEnv.toMap.get("PYSPARK_USERBASE")
+        .mkString(ApplicationConstants.CLASS_PATH_SEPARATOR)
     }
 
     if (isClusterMode) {
-      // propagate PYSPARK_DRIVER_PYTHON and PYSPARK_PYTHON to driver in cluster mode
+      // propagate PYSPARK_DRIVER_PYTHON, PYSPARK_PYTHON,
+      // PYSPARK_DRIVER_USERBASE and PYSPARK_USERBASE to driver in cluster mode
       Seq("PYSPARK_DRIVER_PYTHON", "PYSPARK_PYTHON",
         "PYSPARK_DRIVER_USERBASE", "PYSPARK_USERBASE").foreach { envname =>
         if (!env.contains(envname)) {
