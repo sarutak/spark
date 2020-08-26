@@ -845,9 +845,6 @@ private[spark] class Client(
       val pythonPathExecutorEnv = (sparkConf.getExecutorEnv.toMap.get("PYTHONPATH") ++
         pythonPathList).mkString(ApplicationConstants.CLASS_PATH_SEPARATOR)
       sparkConf.setExecutorEnv("PYTHONPATH", pythonPathExecutorEnv)
-      val pythonUserBaseExecutorEnv = sparkConf.getExecutorEnv.toMap.get("PYSPARK_USERBASE")
-        .mkString(ApplicationConstants.CLASS_PATH_SEPARATOR)
-      sparkConf.setExecutorEnv("PYTHONUSERBASE", pythonUserBaseExecutorEnv)
     }
 
     if (isClusterMode) {

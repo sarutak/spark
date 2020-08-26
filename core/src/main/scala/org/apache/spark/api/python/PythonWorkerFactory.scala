@@ -95,9 +95,8 @@ private[spark] class PythonWorkerFactory(pythonExec: String, envVars: Map[String
     envVars.getOrElse("PYTHONPATH", ""),
     sys.env.getOrElse("PYTHONPATH", ""))
 
-  private val pythonUserBase = PythonUtils.mergePythonPaths(
-    envVars.getOrElse("PYTHONUSERBASE", ""),
-    sys.env.getOrElse("PYTHONUSERBASE", ""))
+    private val pythonUserBase =
+      envVars.getOrElse("PYTHONUSERBASE", sys.env.getOrElse("PYTHONUSERBASE", ""))
 
   def create(): Socket = {
     if (useDaemon) {
