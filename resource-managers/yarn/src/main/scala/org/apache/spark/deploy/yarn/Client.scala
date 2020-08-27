@@ -848,10 +848,8 @@ private[spark] class Client(
     }
 
     if (isClusterMode) {
-      // propagate PYSPARK_DRIVER_PYTHON, PYSPARK_PYTHON,
-      // PYSPARK_DRIVER_USERBASE and PYSPARK_USERBASE to driver in cluster mode
-      Seq("PYSPARK_DRIVER_PYTHON", "PYSPARK_PYTHON",
-        "PYSPARK_DRIVER_USERBASE", "PYSPARK_USERBASE").foreach { envname =>
+      // propagate PYSPARK_DRIVER_PYTHON and PYSPARK_PYTHON to driver in cluster mode
+      Seq("PYSPARK_DRIVER_PYTHON", "PYSPARK_PYTHON").foreach { envname =>
         if (!env.contains(envname)) {
           sys.env.get(envname).foreach(env(envname) = _)
         }
