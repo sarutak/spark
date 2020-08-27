@@ -83,8 +83,7 @@ object PythonRunner {
     // python process is through environment variable.
     sparkConf.get(PYSPARK_PYTHON).foreach(env.put("PYSPARK_PYTHON", _))
     sys.env.get("PYTHONHASHSEED").foreach(env.put("PYTHONHASHSEED", _))
-    sys.env.get("PYSPARK_DRIVER_USERBASE").orElse(sys.env.get("PYSPARK_USERBASE"))
-      .foreach(env.put("PYTHONUSERBASE", _))
+    sys.env.get("PYTHONUSERBASE").foreach(env.put("PYTHONUSERBASE", _))
     // if OMP_NUM_THREADS is not explicitly set, override it with the number of cores
     if (sparkConf.getOption("spark.yarn.appMasterEnv.OMP_NUM_THREADS").isEmpty &&
         sparkConf.getOption("spark.mesos.driverEnv.OMP_NUM_THREADS").isEmpty &&
