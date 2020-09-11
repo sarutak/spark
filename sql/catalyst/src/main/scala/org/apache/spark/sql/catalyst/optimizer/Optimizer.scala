@@ -101,6 +101,7 @@ abstract class Optimizer(catalogManager: CatalogManager)
         RemoveDispensableExpressions,
         SimplifyBinaryComparison,
         ReplaceNullWithFalseInPredicate,
+        CompressInequality,
         PruneFilters,
         SimplifyCasts,
         SimplifyCaseConversionExpressions,
@@ -1059,6 +1060,149 @@ object EliminateSorts extends Rule[LogicalPlan] {
     }
 
     aggs.forall(checkValidAggregateExpression)
+  }
+}
+
+object CompressInequality extends Rule[LogicalPlan] with PredicateHelper {
+  case class LowerAndUpper(lower: Option[Expression], upper: Option[Expression])
+
+  def apply(plan: LogicalPlan): LogicalPlan = plan transform {
+    case f @ Filter(cond, _) =>
+      val inequalityMap = mutable.Map[AttributeReference, LowerAndUpper]()
+      val preds = splitConjunctivePredicates(cond)
+      val keptPreds = preds.flatMap {
+        case eq @ EqualNullSafe:
+        case gt @ GreaterThan(a: AttributeReference, l: Literal) =>
+          val entry = inequalityMap.getOrElseUpdate(a, LowerAndUpper(Some(gt), None))
+          val currentLower = entry.lower.flatMap {
+            case GreaterThan(_, lowerLiteral) => Some(lowerLiteral)
+            case GreaterThanOrEqual(_, lowerLiteral) => Some(lowerLiteral)
+            case LessThan(lowerLiteral, _) => Some(lowerLiteral)
+            case LessThanOrEqual(lowerLiteral, _) => Some(lowerLiteral)
+            case _ => None
+          }
+          if (currentLower.isDefined &&
+            GreaterThanOrEqual(l, currentLower.get).eval(EmptyRow).asInstanceOf[Boolean] ||
+            currentLower.isEmpty) {
+            inequalityMap(a) = LowerAndUpper(Some(gt), entry.upper)
+          }
+          None
+        case gt @ GreaterThan(l: Literal, a: AttributeReference) =>
+          val entry = inequalityMap.getOrElseUpdate(a, LowerAndUpper(None, Some(gt)))
+          val currentUpper = entry.upper.flatMap {
+            case GreaterThan(upperLiteral, _) => Some(upperLiteral)
+            case GreaterThanOrEqual(upperLiteral, _) => Some(upperLiteral)
+            case LessThan(_, upperLiteral) => Some(upperLiteral)
+            case LessThanOrEqual(_, upperLiteral) => Some(upperLiteral)
+            case _ => None
+          }
+          if (currentUpper.isDefined &&
+            LessThanOrEqual(l, currentUpper.get).eval(EmptyRow).asInstanceOf[Boolean] ||
+            currentUpper.isEmpty) {
+            inequalityMap(a) = LowerAndUpper(entry.lower, Some(gt))
+          }
+          None
+        case gt @ GreaterThanOrEqual(a: AttributeReference, l: Literal) =>
+          val entry = inequalityMap.getOrElseUpdate(a, LowerAndUpper(Some(gt), None))
+          val currentLower = entry.lower.flatMap {
+            case GreaterThan(_, lowerLiteral) => Some(lowerLiteral)
+            case GreaterThanOrEqual(_, lowerLiteral) => Some(lowerLiteral)
+            case LessThan(lowerLiteral, _) => Some(lowerLiteral)
+            case LessThanOrEqual(lowerLiteral, _) => Some(lowerLiteral)
+            case _ => None
+          }
+          if (currentLower.isDefined &&
+            GreaterThan(l, currentLower.get).eval(EmptyRow).asInstanceOf[Boolean] ||
+            currentLower.isEmpty) {
+            inequalityMap(a) = LowerAndUpper(Some(gt), entry.upper)
+          }
+          None
+        case gt @ GreaterThanOrEqual(l: Literal, a: AttributeReference) =>
+          val entry = inequalityMap.getOrElseUpdate(a, LowerAndUpper(None, Some(gt)))
+          val currentUpper = entry.upper.flatMap {
+            case GreaterThan(upperLiteral, _) => Some(upperLiteral)
+            case GreaterThanOrEqual(upperLiteral, _) => Some(upperLiteral)
+            case LessThan(_, upperLiteral) => Some(upperLiteral)
+            case LessThanOrEqual(_, upperLiteral) => Some(upperLiteral)
+            case _ => None
+          }
+          if (currentUpper.isDefined &&
+            LessThan(l, currentUpper.get).eval(EmptyRow).asInstanceOf[Boolean] ||
+            currentUpper.isEmpty) {
+            inequalityMap(a) = LowerAndUpper(entry.lower, Some(gt))
+          }
+          None
+        case lt @ LessThan(a: AttributeReference, l: Literal) =>
+          val entry = inequalityMap.getOrElseUpdate(a, LowerAndUpper(None, Some(lt)))
+          val currentUpper = entry.upper.flatMap {
+            case GreaterThan(upperLiteral, _) => Some(upperLiteral)
+            case GreaterThanOrEqual(upperLiteral, _) => Some(upperLiteral)
+            case LessThan(_, upperLiteral) => Some(upperLiteral)
+            case LessThanOrEqual(_, upperLiteral) => Some(upperLiteral)
+            case _ => None
+          }
+          if (currentUpper.isDefined &&
+            LessThanOrEqual(l, currentUpper.get).eval(EmptyRow).asInstanceOf[Boolean] ||
+            currentUpper.isEmpty) {
+            inequalityMap(a) = LowerAndUpper(entry.lower, Some(lt))
+          }
+          None
+        case lt @ LessThan(l: Literal, a: AttributeReference) =>
+          val entry = inequalityMap.getOrElseUpdate(a, LowerAndUpper(Some(lt), None))
+          val currentLower = entry.lower.flatMap {
+            case GreaterThan(_, lowerLiteral) => Some(lowerLiteral)
+            case GreaterThanOrEqual(_, lowerLiteral) => Some(lowerLiteral)
+            case LessThan(lowerLiteral, _) => Some(lowerLiteral)
+            case LessThanOrEqual(lowerLiteral, _) => Some(lowerLiteral)
+            case _ => None
+          }
+          if (currentLower.isDefined &&
+            GreaterThanOrEqual(l, currentLower.get).eval(EmptyRow).asInstanceOf[Boolean] ||
+            currentLower.isEmpty) {
+            inequalityMap(a) = LowerAndUpper(Some(lt), entry.upper)
+          }
+          None
+        case lt @ LessThanOrEqual(a: AttributeReference, l: Literal) =>
+          val entry = inequalityMap.getOrElseUpdate(a, LowerAndUpper(None, Some(lt)))
+          val currentUpper = entry.upper.flatMap {
+            case GreaterThan(upperLiteral, _) => Some(upperLiteral)
+            case GreaterThanOrEqual(upperLiteral, _) => Some(upperLiteral)
+            case LessThan(_, upperLiteral) => Some(upperLiteral)
+            case LessThanOrEqual(_, upperLiteral) => Some(upperLiteral)
+            case _ => None
+          }
+          if (currentUpper.isDefined &&
+            LessThan(l, currentUpper.get).eval(EmptyRow).asInstanceOf[Boolean] ||
+            currentUpper.isEmpty) {
+            inequalityMap(a) = LowerAndUpper(entry.lower, Some(lt))
+          }
+          None
+        case lt @ LessThanOrEqual(l: Literal, a: AttributeReference) =>
+          val entry = inequalityMap.getOrElseUpdate(a, LowerAndUpper(Some(lt), None))
+          val currentLower = entry.lower.flatMap {
+            case GreaterThan(_, lowerLiteral) => Some(lowerLiteral)
+            case GreaterThanOrEqual(_, lowerLiteral) => Some(lowerLiteral)
+            case LessThan(lowerLiteral, _) => Some(lowerLiteral)
+            case LessThanOrEqual(lowerLiteral, _) => Some(lowerLiteral)
+            case _ => None
+          }
+          if (currentLower.isDefined &&
+            GreaterThan(l, currentLower.get).eval(EmptyRow).asInstanceOf[Boolean] ||
+            currentLower.isEmpty) {
+            inequalityMap(a) = LowerAndUpper(Some(lt), entry.upper)
+          }
+          None
+        case other => Some(other)
+      }
+
+      val newCond = (inequalityMap.flatMap {
+        case (_, LowerAndUpper(Some(lower), Some(upper))) => Some(And(lower, upper))
+        case (_, LowerAndUpper(Some(lower), None)) => Some(lower)
+        case (_, LowerAndUpper(_, Some(upper))) => Some(upper)
+        case _ => None
+      } ++ keptPreds).reduce(And)
+
+      f.copy(condition = newCond)
   }
 }
 
