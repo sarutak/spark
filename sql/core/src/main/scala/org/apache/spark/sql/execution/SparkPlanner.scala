@@ -33,11 +33,13 @@ class SparkPlanner(
 
   def numPartitions: Int = conf.numShufflePartitions
 
+  val useGraalPython = conf.getConfString("spark.pyspark.graalpython.enabled", "false").toBoolean
+
   override def strategies: Seq[Strategy] =
     experimentalMethods.extraStrategies ++
       extraPlanningStrategies ++ (
       LogicalQueryStageStrategy ::
-      PythonEvals ::
+      (if (useGraalPython) { GraalPythonEvals } else { PythonEvals }) ::
       new DataSourceV2Strategy(session) ::
       FileSourceStrategy ::
       DataSourceStrategy(conf) ::

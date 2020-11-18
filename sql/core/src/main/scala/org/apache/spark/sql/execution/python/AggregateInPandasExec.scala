@@ -21,7 +21,9 @@ import java.io.File
 
 import scala.collection.mutable.ArrayBuffer
 
-import org.apache.spark.{SparkEnv, TaskContext}
+import org.graalvm.polyglot.Value
+
+import org.apache.spark.{GraalEnv, SparkEnv, TaskContext}
 import org.apache.spark.api.python.{ChainedPythonFunctions, PythonEvalType}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
@@ -77,6 +79,8 @@ case class AggregateInPandasExec(
     Seq(groupingExpressions.map(SortOrder(_, Ascending)))
 
   override protected def doExecute(): RDD[InternalRow] = {
+    val useGraalPython =
+      SparkEnv.get.conf.get("spark.pyspark.graalpython.enabled", "false").toBoolean
     val inputRDD = child.execute()
 
     val sessionLocalTimeZone = conf.sessionLocalTimeZone
@@ -134,20 +138,80 @@ case class AggregateInPandasExec(
         rows
       }
 
-      val columnarBatchIter = new ArrowPythonRunner(
-        pyFuncs,
-        PythonEvalType.SQL_GROUPED_AGG_PANDAS_UDF,
-        argOffsets,
-        aggInputSchema,
-        sessionLocalTimeZone,
-        pythonRunnerConf).compute(projectedRowIter, context.partitionId(), context)
+      val columnarBatchIter = if (useGraalPython) {
+        val dataTypes = aggInputSchema.map(_.dataType)
+        val bytes =
+          pyFuncs(0).funcs(0).command.map(value => Integer.toUnsignedLong(value) & 0xff).toArray
+        val graalContext = GraalEnv.graalContext.get()
+        val get_udf = graalContext.eval("python", "gr.get_pandas_grouped_agg_udf")
+        val func = get_udf.execute(bytes)
+
+        val runner = new GraalPythonUDFRunner
+
+        val mutableRow = new GenericInternalRow(1)
+        val resultType = if (udfExpressions.length == 1) {
+          udfExpressions.head.dataType
+        } else {
+          StructType(udfExpressions.map(u => StructField("", u.dataType, u.nullable)))
+        }
+
+        // scalastyle: off
+        // For debug
+        // println("resultType is " + resultType)
+
+        val args = new Array[Object](argOffsets(0).size)
+        val argBuffs = new Array[Value](argOffsets(0).size)
+        argBuffs.indices.foreach(i => argBuffs(i) = graalContext.eval("python", "[]"))
+        val fromGraal = EvaluateGraalPython.makeFromGraal(resultType)
+        projectedRowIter.map { rows =>
+          rows.foreach { row =>
+            var i = 0
+            while(i < argOffsets(0).size) {
+              val argIdx = argOffsets(0)(i)
+
+              // For debug
+              // println(row.get(argIdx, dataTypes(argIdx)))
+              // println(row.get(argIdx, dataTypes(argIdx)).getClass)
+
+              argBuffs(i).invokeMember("append", row.get(argIdx, dataTypes(argIdx)))
+              i += 1
+            }
+          }
+          var i = 0
+          while (i < argOffsets(0).size) {
+            args(i) = argBuffs(i)
+            i += 1
+          }
+          val result = runner.run(func, args)
+
+          // For debug
+          // println(result)
+
+          mutableRow(0) = fromGraal(result)
+
+          // For debug
+          // println(mutableRow)
+
+          mutableRow
+          // scalastyle:off
+        }
+      } else {
+        new ArrowPythonRunner(
+          pyFuncs,
+          PythonEvalType.SQL_GROUPED_AGG_PANDAS_UDF,
+          argOffsets,
+          aggInputSchema,
+          sessionLocalTimeZone,
+          pythonRunnerConf).compute(projectedRowIter, context.partitionId(), context)
+          .map(_.rowIterator().next())
+      }
 
       val joinedAttributes =
         groupingExpressions.map(_.toAttribute) ++ udfExpressions.map(_.resultAttribute)
       val joined = new JoinedRow
       val resultProj = UnsafeProjection.create(resultExpressions, joinedAttributes)
 
-      columnarBatchIter.map(_.rowIterator.next()).map { aggOutputRow =>
+      columnarBatchIter.map { aggOutputRow =>
         val leftRow = queue.remove()
         val joinedRow = joined(leftRow, aggOutputRow)
         resultProj(joinedRow)

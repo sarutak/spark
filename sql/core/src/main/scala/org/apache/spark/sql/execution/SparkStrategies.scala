@@ -676,6 +676,17 @@ abstract class SparkStrategies extends QueryPlanner[SparkPlan] {
     }
   }
 
+  object GraalPythonEvals extends Strategy {
+    override def apply(plan: LogicalPlan): Seq[SparkPlan] = plan match {
+      case ArrowEvalPython(udfs, output, child, evalType) =>
+        EvalGraalPandasExec(udfs, output, planLater(child), evalType) :: Nil
+      case BatchEvalPython(udfs, output, child) =>
+        EvalGraalPythonExec(udfs, output, planLater(child)) :: Nil
+      case _ =>
+        Nil
+    }
+  }
+
   object BasicOperators extends Strategy {
     def apply(plan: LogicalPlan): Seq[SparkPlan] = plan match {
       case d: DataWritingCommand => DataWritingCommandExec(d, planLater(d.query)) :: Nil

@@ -25,7 +25,10 @@ import json
 import re
 import base64
 from array import array
-import ctypes
+
+# GraalPython doesn't support ctypes for now.
+# import ctypes
+
 import warnings
 
 if sys.version >= "3":
@@ -931,20 +934,34 @@ if sys.version >= "3":
 # Reference for JVM's supported integral types:
 # http://docs.oracle.com/javase/specs/jvms/se8/html/jvms-2.html#jvms-2.3.1
 
-_array_signed_int_typecode_ctype_mappings = {
-    'b': ctypes.c_byte,
-    'h': ctypes.c_short,
-    'i': ctypes.c_int,
-    'l': ctypes.c_long,
+# GraalPython doesn't support ctypes for now so the size for each type is hard-coded.
+# _array_signed_int_typecode_ctype_mappings = {
+#     'b': ctypes.c_byte,
+#     'h': ctypes.c_short,
+#     'i': ctypes.c_int,
+#     'l': ctypes.c_long,
+# }
+#
+# _array_unsigned_int_typecode_ctype_mappings = {
+#     'B': 1 # ctypes.c_ubyte,
+#     'H': 2 # ctypes.c_ushort,
+#     'I': 4 # ctypes.c_uint,
+#     'L': 8 # ctypes.c_ulong
+# }
+
+_array_signed_int_typecode_size_mappings = {
+    'b': 1,
+    'h': 2,
+    'i': 4,
+    'l': 8,
 }
 
-_array_unsigned_int_typecode_ctype_mappings = {
-    'B': ctypes.c_ubyte,
-    'H': ctypes.c_ushort,
-    'I': ctypes.c_uint,
-    'L': ctypes.c_ulong
+_array_unsigned_int_typecode_size_mappings = {
+    'B': 1,
+    'H': 2,
+    'I': 4,
+    'L': 8,
 }
-
 
 def _int_size_to_type(size):
     """
@@ -969,19 +986,31 @@ _array_type_mappings = {
     'd': DoubleType
 }
 
+# GraalPython doesn't support ctypes for now
+# so the following iteration is re-implemented without ctype.
 # compute array typecode mappings for signed integer types
-for _typecode in _array_signed_int_typecode_ctype_mappings.keys():
-    size = ctypes.sizeof(_array_signed_int_typecode_ctype_mappings[_typecode]) * 8
-    dt = _int_size_to_type(size)
+# for _typecode in _array_signed_int_typecode_ctype_mappings.keys():
+#     size = ctypes.sizeof(_array_signed_int_typecode_ctype_mappings[_typecode]) * 8
+#     dt = _int_size_to_type(size)
+#     if dt is not None:
+#         _array_type_mappings[_typecode] = dt
+for _typecode in _array_signed_int_typecode_size_mappings.keys():
+    size_in_bit = _array_signed_int_typecode_size_mappings[_typecode] * 8
+    dt = _int_size_to_type(size_in_bit)
     if dt is not None:
         _array_type_mappings[_typecode] = dt
 
 # compute array typecode mappings for unsigned integer types
-for _typecode in _array_unsigned_int_typecode_ctype_mappings.keys():
-    # JVM does not have unsigned types, so use signed types that is at least 1
-    # bit larger to store
-    size = ctypes.sizeof(_array_unsigned_int_typecode_ctype_mappings[_typecode]) * 8 + 1
-    dt = _int_size_to_type(size)
+# for _typecode in _array_unsigned_int_typecode_ctype_mappings.keys():
+#     # JVM does not have unsigned types, so use signed types that is at least 1
+#     # bit larger to store
+#     size = ctypes.sizeof(_array_unsigned_int_typecode_ctype_mappings[_typecode]) * 8 + 1
+#     dt = _int_size_to_type(size)
+#     if dt is not None:
+#         _array_type_mappings[_typecode] = dt
+for _typecode in _array_unsigned_int_typecode_size_mappings.keys():
+    size_in_bit = _array_unsigned_int_typecode_size_mappings[_typecode] * 8
+    dt = _int_size_to_type(size_in_bit)
     if dt is not None:
         _array_type_mappings[_typecode] = dt
 

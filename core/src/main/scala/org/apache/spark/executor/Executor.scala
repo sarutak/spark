@@ -97,6 +97,7 @@ private[spark] class Executor(
     Thread.setDefaultUncaughtExceptionHandler(uncaughtExceptionHandler)
   }
 
+  val useGraalPython = conf.getBoolean("spark.pyspark.graalpython.enabled", false)
   // Start worker thread pool
   // Use UninterruptibleThread to run tasks so that we can allow running codes without being
   // interrupted by `Thread.interrupt()`. Some issues, such as KAFKA-1894, HADOOP-10622,
@@ -107,7 +108,30 @@ private[spark] class Executor(
       .setNameFormat("Executor task launch worker-%d")
       .setThreadFactory((r: Runnable) => new UninterruptibleThread(r, "unused"))
       .build()
-    Executors.newCachedThreadPool(threadFactory).asInstanceOf[ThreadPoolExecutor]
+
+    if (useGraalPython) {
+      val numCores = conf.getInt(EXECUTOR_CORES.key, EXECUTOR_CORES.defaultValue.get)
+
+      // To avoid Graal contexts to be discarded due to
+      // the corresponding thread for each context shrinks,
+      // FixedThreadPool should be used rather than CachedThreadPool.
+      // Also it's difficult to share one Graal context among multiple threads
+      // due to Pandas is not thread-safe though GraalPython itself can work with multiple threads.
+      // So dedicated Graal context is necessary for each thread.
+      val tpe =
+        Executors.newFixedThreadPool(numCores, threadFactory).asInstanceOf[ThreadPoolExecutor]
+      val barrier = new CyclicBarrier(numCores)
+      (0 until numCores).foreach { _ =>
+        tpe.execute { () =>
+          // Just initialize context.
+          GraalEnv.graalContext.get
+          barrier.await()
+        }
+      }
+      tpe
+    } else {
+      Executors.newCachedThreadPool(threadFactory).asInstanceOf[ThreadPoolExecutor]
+    }
   }
   private val executorSource = new ExecutorSource(threadPool, executorId)
   // Pool used for threads that supervise task killing / cancellation

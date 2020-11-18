@@ -336,7 +336,13 @@ class UDFRegistration(object):
                     "Invalid f: f must be SQL_BATCHED_UDF, SQL_SCALAR_PANDAS_UDF, "
                     "SQL_SCALAR_PANDAS_ITER_UDF, SQL_GROUPED_AGG_PANDAS_UDF or "
                     "SQL_MAP_PANDAS_ITER_UDF.")
-            register_udf = UserDefinedFunction(f.func, returnType=f.returnType, name=name,
+
+            # For debug
+            # print(f.__module__)
+            # register_f = f if f.__module__ != '__main__' else f.func
+
+            register_f = f.func
+            register_udf = UserDefinedFunction(register_f, returnType=f.returnType, name=name,
                                                evalType=f.evalType,
                                                deterministic=f.deterministic)
             return_udf = f
