@@ -173,7 +173,9 @@ case class AggregateInPandasExec(
               // println(row.get(argIdx, dataTypes(argIdx)))
               // println(row.get(argIdx, dataTypes(argIdx)).getClass)
 
-              argBuffs(i).invokeMember("append", row.get(argIdx, dataTypes(argIdx)))
+              val dt = dataTypes(argIdx)
+              argBuffs(i).invokeMember("append",
+                EvaluateGraalPython.toJava(row.get(argIdx, dt), dt).asInstanceOf[Object])
               i += 1
             }
           }

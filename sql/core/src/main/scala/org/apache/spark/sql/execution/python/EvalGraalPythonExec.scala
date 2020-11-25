@@ -95,7 +95,8 @@ case class EvalGraalPythonExec(
       var i = 0
       while (i < args.size) {
         val idx = argOffsets(0)(i)
-        args(i) = row.get(idx, dataTypes(idx))
+        val dt = dataTypes(idx)
+        args(i) = EvaluateGraalPython.toJava(row.get(idx, dataTypes(idx)), dt).asInstanceOf[Object]
         i += 1
       }
       val result = runner.run(func, args)

@@ -86,7 +86,9 @@ case class EvalGraalPandasExec(
         var i = 0
         while (i < argOffsets(0).size) {
           val argIdx = argOffsets(0)(i)
-          argBuffs(i).invokeMember("append", row.get(argIdx, dataTypes(argIdx)))
+          val dt = dataTypes(argIdx)
+          argBuffs(i).invokeMember("append",
+            EvaluateGraalPython.toJava(row.get(i, dt), dt).asInstanceOf[Object])
           i += 1
         }
       }
