@@ -632,6 +632,7 @@ object KubernetesIntegrationTests {
           "-t", imageTag.value,
           "-p", s"$bindingsDir/python/Dockerfile",
           "-R", s"$bindingsDir/R/Dockerfile",
+          "-b", s"java_image_tag=${sys.env.getOrElse("JAVA_IMAGE_TAG", "8-jre-slim")}",
           "build"
         )
         val ec = Process(cmd).!
