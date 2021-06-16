@@ -1204,7 +1204,7 @@ SELECT
   to_csv(named_struct('a', interval 32 month, 'b', interval 70 minute)),
   from_csv(to_csv(named_struct('a', interval 32 month, 'b', interval 70 minute)), 'a interval, b interval')
 -- !query schema
-struct<from_csv(1, 1 day):struct<a:int,b:interval>,to_csv(from_csv(1, 1 day)):string,to_csv(named_struct(a, INTERVAL '8' MONTH, b, INTERVAL '10' MINUTE)):string,from_csv(to_csv(named_struct(a, INTERVAL '8' MONTH, b, INTERVAL '10' MINUTE))):struct<a:interval,b:interval>>
+struct<from_csv(1, 1 day):struct<a:int,b:interval>,to_csv(from_csv(1, 1 day)):string,to_csv(named_struct(a, INTERVAL '2-8' YEAR TO MONTH, b, INTERVAL '01:10' HOUR TO MINUTE)):string,from_csv(to_csv(named_struct(a, INTERVAL '2-8' YEAR TO MONTH, b, INTERVAL '01:10' HOUR TO MINUTE))):struct<a:interval,b:interval>>
 -- !query output
 {"a":1,"b":1 days}	1,1 days	32,4200000000	{"a":null,"b":null}
 
