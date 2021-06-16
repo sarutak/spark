@@ -2364,6 +2364,22 @@ class AstBuilder extends SqlBaseBaseVisitor[AnyRef] with SQLConfHelper with Logg
         val end = DayTimeIntervalType.stringToField(toUnit)
         Literal(micros, DayTimeIntervalType(start, end))
       }
+    } else if (ctx.errorCapturingMultiUnitsInterval != null && !conf.legacyIntervalEnabled) {
+      val units =
+        ctx.errorCapturingMultiUnitsInterval.body.unit.asScala.map(_.getText.stripSuffix("s"))
+
+     if (units.forall(DayTimeIntervalType.stringToField.contains)) {
+        val micros = IntervalUtils.getDuration(calendarInterval, TimeUnit.MICROSECONDS)
+        val fields = units.map(DayTimeIntervalType.stringToField)
+        Literal(micros, DayTimeIntervalType(fields.min, fields.max))
+      } else if (units.exists(DayTimeIntervalType.stringToField.contains)) {
+        // year-month intervals and day-time intervals are mixed.
+        throw QueryParsingErrors.mixedIntervalLiteralError(ctx)
+     } else if (calendarInterval.days != 0 || calendarInterval.microseconds != 0) {
+       Literal(calendarInterval, CalendarIntervalType)
+     } else {
+        Literal(calendarInterval.months, YearMonthIntervalType)
+      }
     } else {
       Literal(calendarInterval, CalendarIntervalType)
     }

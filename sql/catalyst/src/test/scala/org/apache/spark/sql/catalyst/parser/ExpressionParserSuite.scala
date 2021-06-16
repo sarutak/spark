@@ -678,43 +678,43 @@ class ExpressionParserSuite extends AnalysisTest {
       }
     }
 
-    // Empty interval statement
-    intercept("interval", "at least one time unit should be given for interval literal")
-
-    // Single Intervals.
-    val forms = Seq("", "s")
-    val values = Seq("0", "10", "-7", "21")
-    intervalUnits.foreach { unit =>
-      forms.foreach { form =>
-         values.foreach { value =>
-           val expected = intervalLiteral(unit, value)
-           checkIntervals(s"$value $unit$form", expected)
-           checkIntervals(s"'$value' $unit$form", expected)
-         }
-      }
-    }
-
-    // Hive nanosecond notation.
-    checkIntervals("13.123456789 seconds", intervalLiteral(SECOND, "13.123456789"))
-    checkIntervals(
-      "-13.123456789 second",
-      Literal(new CalendarInterval(
-        0,
-        0,
-        DateTimeTestUtils.secFrac(-13, -123, -456))))
-    checkIntervals(
-      "13.123456 second",
-      Literal(new CalendarInterval(
-        0,
-        0,
-        DateTimeTestUtils.secFrac(13, 123, 456))))
-    checkIntervals("1.001 second",
-      Literal(IntervalUtils.stringToInterval("1 second 1 millisecond")))
-
-    // Non Existing unit
-    intercept("interval 10 nanoseconds", "invalid unit 'nanoseconds'")
-
     withSQLConf(SQLConf.LEGACY_INTERVAL_ENABLED.key -> "true") {
+      // Empty interval statement
+      intercept("interval", "at least one time unit should be given for interval literal")
+
+      // Single Intervals.
+      val forms = Seq("", "s")
+      val values = Seq("0", "10", "-7", "21")
+      intervalUnits.foreach { unit =>
+        forms.foreach { form =>
+          values.foreach { value =>
+            val expected = intervalLiteral(unit, value)
+            checkIntervals(s"$value $unit$form", expected)
+            checkIntervals(s"'$value' $unit$form", expected)
+          }
+        }
+      }
+
+      // Hive nanosecond notation.
+      checkIntervals("13.123456789 seconds", intervalLiteral(SECOND, "13.123456789"))
+      checkIntervals(
+        "-13.123456789 second",
+        Literal(new CalendarInterval(
+          0,
+          0,
+          DateTimeTestUtils.secFrac(-13, -123, -456))))
+      checkIntervals(
+        "13.123456 second",
+        Literal(new CalendarInterval(
+          0,
+          0,
+          DateTimeTestUtils.secFrac(13, 123, 456))))
+      checkIntervals("1.001 second",
+        Literal(IntervalUtils.stringToInterval("1 second 1 millisecond")))
+
+      // Non Existing unit
+      intercept("interval 10 nanoseconds", "invalid unit 'nanoseconds'")
+
       // Year-Month intervals.
       val yearMonthValues = Seq("123-10", "496-0", "-2-3", "-123-0", "\t -1-2\t")
       yearMonthValues.foreach { value =>
@@ -747,16 +747,16 @@ class ExpressionParserSuite extends AnalysisTest {
         val result = Literal(IntervalUtils.fromDayTimeString(value, HOUR, SECOND))
         checkIntervals(s"'$value' hour to second", result)
       }
+
+      // Unknown FROM TO intervals
+      intercept("interval '10' month to second",
+        "Intervals FROM month TO second are not supported.")
+
+      // Composed intervals.
+      checkIntervals(
+        "3 months 4 days 22 seconds 1 millisecond",
+        Literal(new CalendarInterval(3, 4, 22001000L)))
     }
-
-    // Unknown FROM TO intervals
-    intercept("interval '10' month to second",
-      "Intervals FROM month TO second are not supported.")
-
-    // Composed intervals.
-    checkIntervals(
-      "3 months 4 days 22 seconds 1 millisecond",
-      Literal(new CalendarInterval(3, 4, 22001000L)))
   }
 
   test("composed expressions") {

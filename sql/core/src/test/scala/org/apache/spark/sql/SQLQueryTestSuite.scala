@@ -216,6 +216,10 @@ class SQLQueryTestSuite extends QueryTest with SharedSparkSession with SQLHelper
   protected case class AnsiTestCase(
       name: String, inputFile: String, resultFile: String) extends TestCase with AnsiTest
 
+  /** A legacy interval test case. */
+  protected case class LegacyIntervalTestCase(
+      name: String, inputFile: String, resultFile: String) extends TestCase
+
   protected def createScalaTestCase(testCase: TestCase): Unit = {
     if (ignoreList.exists(t =>
         testCase.name.toLowerCase(Locale.ROOT).contains(t.toLowerCase(Locale.ROOT)))) {
@@ -370,6 +374,8 @@ class SQLQueryTestSuite extends QueryTest with SharedSparkSession with SQLHelper
         localSparkSession.conf.set(SQLConf.LEGACY_INTERVAL_ENABLED.key, true)
       case _: AnsiTest =>
         localSparkSession.conf.set(SQLConf.ANSI_ENABLED.key, true)
+      case _: LegacyIntervalTestCase =>
+        localSparkSession.conf.set(SQLConf.LEGACY_INTERVAL_ENABLED.key, true)
       case _ =>
     }
 
@@ -481,6 +487,9 @@ class SQLQueryTestSuite extends QueryTest with SharedSparkSession with SQLHelper
         PgSQLTestCase(testCaseName, absPath, resultFile) :: Nil
       } else if (file.getAbsolutePath.startsWith(s"$inputFilePath${File.separator}ansi")) {
         AnsiTestCase(testCaseName, absPath, resultFile) :: Nil
+      } else if (file.getAbsolutePath.startsWith(
+        s"$inputFilePath${File.separator}legacy_interval")) {
+        LegacyIntervalTestCase(testCaseName, absPath, resultFile) :: Nil
       } else {
         RegularTestCase(testCaseName, absPath, resultFile) :: Nil
       }
