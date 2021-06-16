@@ -13,9 +13,15 @@ struct<((TIMESTAMP '2019-10-15 10:11:12.001002' - DATE '2019-10-15') * 3):interv
 -- !query
 select interval 4 month 2 weeks 3 microseconds * 1.5
 -- !query schema
-struct<multiply_interval(INTERVAL '4 months 14 days 0.000003 seconds', 1.5):interval>
+struct<>
 -- !query output
-6 months 21 days 0.000005 seconds
+org.apache.spark.sql.catalyst.parser.ParseException
+
+Only [year, month, day, hour, minute, second] are supported for interval units(line 1, pos 7)
+
+== SQL ==
+select interval 4 month 2 weeks 3 microseconds * 1.5
+-------^^^
 
 
 -- !query
@@ -41,7 +47,7 @@ select interval 2147483647 month / 0.5
 struct<>
 -- !query output
 java.lang.ArithmeticException
-integer overflow
+Overflow
 
 
 -- !query
@@ -50,7 +56,7 @@ select interval 2147483647 day * 2
 struct<>
 -- !query output
 java.lang.ArithmeticException
-integer overflow
+long overflow
 
 
 -- !query
@@ -59,7 +65,7 @@ select interval 2147483647 day / 0.5
 struct<>
 -- !query output
 java.lang.ArithmeticException
-integer overflow
+long overflow
 
 
 -- !query
@@ -106,9 +112,15 @@ struct<(- INTERVAL '-1 months 1 days -1 seconds'):interval>
 -- !query
 select -interval -1 month 1 day -1 second
 -- !query schema
-struct<(- INTERVAL '-1 months 1 days -1 seconds'):interval>
+struct<>
 -- !query output
-1 months -1 days 1 seconds
+org.apache.spark.sql.catalyst.parser.ParseException
+
+year-month and day-time intervals cannot be mixed(line 1, pos 8)
+
+== SQL ==
+select -interval -1 month 1 day -1 second
+--------^^^
 
 
 -- !query
@@ -122,9 +134,15 @@ struct<(+ INTERVAL '-1 months 1 days -1 seconds'):interval>
 -- !query
 select +interval -1 month 1 day -1 second
 -- !query schema
-struct<(+ INTERVAL '-1 months 1 days -1 seconds'):interval>
+struct<>
 -- !query output
--1 months 1 days -1 seconds
+org.apache.spark.sql.catalyst.parser.ParseException
+
+year-month and day-time intervals cannot be mixed(line 1, pos 8)
+
+== SQL ==
+select +interval -1 month 1 day -1 second
+--------^^^
 
 
 -- !query
@@ -365,25 +383,37 @@ NULL
 -- !query
 select interval 13.123456789 seconds, interval -13.123456789 second
 -- !query schema
-struct<INTERVAL '13.123456 seconds':interval,INTERVAL '-13.123456 seconds':interval>
+struct<INTERVAL '13.123456' SECOND:interval second,INTERVAL '13.123456' SECOND:interval second>
 -- !query output
-13.123456 seconds	-13.123456 seconds
+0 00:00:13.123456000	-0 00:00:13.123456000
 
 
 -- !query
 select interval 1 year 2 month 3 week 4 day 5 hour 6 minute 7 seconds 8 millisecond 9 microsecond
 -- !query schema
-struct<INTERVAL '1 years 2 months 25 days 5 hours 6 minutes 7.008009 seconds':interval>
+struct<>
 -- !query output
-1 years 2 months 25 days 5 hours 6 minutes 7.008009 seconds
+org.apache.spark.sql.catalyst.parser.ParseException
+
+year-month and day-time intervals cannot be mixed(line 1, pos 7)
+
+== SQL ==
+select interval 1 year 2 month 3 week 4 day 5 hour 6 minute 7 seconds 8 millisecond 9 microsecond
+-------^^^
 
 
 -- !query
 select interval '30' year '25' month '-100' day '40' hour '80' minute '299.889987299' second
 -- !query schema
-struct<INTERVAL '32 years 1 months -100 days 41 hours 24 minutes 59.889987 seconds':interval>
+struct<>
 -- !query output
-32 years 1 months -100 days 41 hours 24 minutes 59.889987 seconds
+org.apache.spark.sql.catalyst.parser.ParseException
+
+year-month and day-time intervals cannot be mixed(line 1, pos 7)
+
+== SQL ==
+select interval '30' year '25' month '-100' day '40' hour '80' minute '299.889987299' second
+-------^^^
 
 
 -- !query
@@ -477,17 +507,17 @@ struct<INTERVAL '40:32' MINUTE TO SECOND:interval minute to second>
 -- !query
 select interval 30 day day
 -- !query schema
-struct<day:interval>
+struct<day:interval day>
 -- !query output
-30 days
+30 00:00:00.000000000
 
 
 -- !query
 select interval 30 days days
 -- !query schema
-struct<days:interval>
+struct<days:interval day>
 -- !query output
-30 days
+30 00:00:00.000000000
 
 
 -- !query
@@ -591,9 +621,15 @@ select interval 10 nanoseconds
 -- !query
 select map(1, interval 1 day, 2, interval 3 week)
 -- !query schema
-struct<map(1, INTERVAL '1 days', 2, INTERVAL '21 days'):map<int,interval>>
+struct<>
 -- !query output
-{1:1 days,2:21 days}
+org.apache.spark.sql.catalyst.parser.ParseException
+
+Only [year, month, day, hour, minute, second] are supported for interval units(line 1, pos 33)
+
+== SQL ==
+select map(1, interval 1 day, 2, interval 3 week)
+---------------------------------^^^
 
 
 -- !query
@@ -1016,17 +1052,17 @@ struct<INTERVAL '1 days':interval>
 -- !query
 select interval '1\t' day
 -- !query schema
-struct<INTERVAL '1 days':interval>
+struct<INTERVAL '1' DAY:interval day>
 -- !query output
-1 days
+1 00:00:00.000000000
 
 
 -- !query
 select interval '1 ' day
 -- !query schema
-struct<INTERVAL '1 days':interval>
+struct<INTERVAL '1' DAY:interval day>
 -- !query output
-1 days
+1 00:00:00.000000000
 
 
 -- !query
@@ -1168,9 +1204,9 @@ SELECT
   to_csv(named_struct('a', interval 32 month, 'b', interval 70 minute)),
   from_csv(to_csv(named_struct('a', interval 32 month, 'b', interval 70 minute)), 'a interval, b interval')
 -- !query schema
-struct<from_csv(1, 1 day):struct<a:int,b:interval>,to_csv(from_csv(1, 1 day)):string,to_csv(named_struct(a, INTERVAL '2 years 8 months', b, INTERVAL '1 hours 10 minutes')):string,from_csv(to_csv(named_struct(a, INTERVAL '2 years 8 months', b, INTERVAL '1 hours 10 minutes'))):struct<a:interval,b:interval>>
+struct<from_csv(1, 1 day):struct<a:int,b:interval>,to_csv(from_csv(1, 1 day)):string,to_csv(named_struct(a, INTERVAL '2-8' YEAR TO MONTH, b, INTERVAL '10' MINUTE)):string,from_csv(to_csv(named_struct(a, INTERVAL '2-8' YEAR TO MONTH, b, INTERVAL '10' MINUTE))):struct<a:interval,b:interval>>
 -- !query output
-{"a":1,"b":1 days}	1,1 days	2 years 8 months,1 hours 10 minutes	{"a":2 years 8 months,"b":1 hours 10 minutes}
+{"a":1,"b":1 days}	1,1 days	32,4200000000	{"a":null,"b":null}
 
 
 -- !query
@@ -1180,9 +1216,19 @@ SELECT
   to_json(map('a', interval 25 month 100 day 130 minute)),
   from_json(to_json(map('a', interval 25 month 100 day 130 minute)), 'a interval')
 -- !query schema
-struct<from_json({"a":"1 days"}):struct<a:interval>,to_json(from_json({"a":"1 days"})):string,to_json(map(a, INTERVAL '2 years 1 months 100 days 2 hours 10 minutes')):string,from_json(to_json(map(a, INTERVAL '2 years 1 months 100 days 2 hours 10 minutes'))):struct<a:interval>>
+struct<>
 -- !query output
-{"a":1 days}	{"a":"1 days"}	{"a":"2 years 1 months 100 days 2 hours 10 minutes"}	{"a":2 years 1 months 100 days 2 hours 10 minutes}
+org.apache.spark.sql.catalyst.parser.ParseException
+
+year-month and day-time intervals cannot be mixed(line 4, pos 19)
+
+== SQL ==
+SELECT
+  from_json('{"a":"1 days"}', 'a interval'),
+  to_json(from_json('{"a":"1 days"}', 'a interval')),
+  to_json(map('a', interval 25 month 100 day 130 minute)),
+-------------------^^^
+  from_json(to_json(map('a', interval 25 month 100 day 130 minute)), 'a interval')
 
 
 -- !query
@@ -1314,9 +1360,9 @@ select interval 'interval 1' day
 -- !query
 select interval '-\t 1' day
 -- !query schema
-struct<INTERVAL '-1 days':interval>
+struct<INTERVAL '-1' DAY:interval day>
 -- !query output
--1 days
+-1 00:00:00.000000000
 
 
 -- !query

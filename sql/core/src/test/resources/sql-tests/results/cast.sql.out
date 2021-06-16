@@ -286,9 +286,15 @@ struct<CAST(interval 3 month 1 hour AS INTERVAL):interval>
 -- !query
 SELECT CAST(interval 3 month 1 hour AS string)
 -- !query schema
-struct<CAST(INTERVAL '3 months 1 hours' AS STRING):string>
+struct<>
 -- !query output
-3 months 1 hours
+org.apache.spark.sql.catalyst.parser.ParseException
+
+year-month and day-time intervals cannot be mixed(line 1, pos 12)
+
+== SQL ==
+SELECT CAST(interval 3 month 1 hour AS string)
+------------^^^
 
 
 -- !query
