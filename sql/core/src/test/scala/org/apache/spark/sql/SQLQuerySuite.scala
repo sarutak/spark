@@ -4009,18 +4009,37 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
   }
 
   test("SPARK-35737: Parse day-time interval literals to tightest types") {
+    import DayTimeIntervalType._
     val dayToSecDF = spark.sql("SELECT INTERVAL '13 02:02:10' DAY TO SECOND")
-    assert(dayToSecDF.schema.head.dataType === DayTimeIntervalType(0, 3))
+    assert(dayToSecDF.schema.head.dataType === DayTimeIntervalType(DAY, SECOND))
     val dayToMinuteDF = spark.sql("SELECT INTERVAL '-2 13:00' DAY TO MINUTE")
-    assert(dayToMinuteDF.schema.head.dataType === DayTimeIntervalType(0, 2))
+    assert(dayToMinuteDF.schema.head.dataType === DayTimeIntervalType(DAY, MINUTE))
     val dayToHourDF = spark.sql("SELECT INTERVAL '0 15' DAY TO HOUR")
-    assert(dayToHourDF.schema.head.dataType === DayTimeIntervalType(0, 1))
+    assert(dayToHourDF.schema.head.dataType === DayTimeIntervalType(DAY, HOUR))
+    val dayDF = spark.sql("SELECT INTERVAL '23' DAY")
+    assert(dayDF.schema.head.dataType === DayTimeIntervalType(DAY, DAY))
     val hourToSecDF = spark.sql("SELECT INTERVAL '00:21:02.03' HOUR TO SECOND")
-    assert(hourToSecDF.schema.head.dataType === DayTimeIntervalType(1, 3))
+    assert(hourToSecDF.schema.head.dataType === DayTimeIntervalType(HOUR, SECOND))
     val hourToMinuteDF = spark.sql("SELECT INTERVAL '01:02' HOUR TO MINUTE")
-    assert(hourToMinuteDF.schema.head.dataType === DayTimeIntervalType(1, 2))
+    assert(hourToMinuteDF.schema.head.dataType === DayTimeIntervalType(HOUR, MINUTE))
+    val hourDF = spark.sql("SELECT INTERVAL '17' HOUR")
+    assert(hourDF.schema.head.dataType === DayTimeIntervalType(HOUR, HOUR))
     val minuteToSecDF = spark.sql("SELECT INTERVAL '10:03.775808000' MINUTE TO SECOND")
-    assert(minuteToSecDF.schema.head.dataType === DayTimeIntervalType(2, 3))
+    assert(minuteToSecDF.schema.head.dataType === DayTimeIntervalType(MINUTE, SECOND))
+    val minuteDF = spark.sql("SELECT INTERVAL '03' MINUTE")
+    assert(minuteDF.schema.head.dataType === DayTimeIntervalType(MINUTE, MINUTE))
+    val secondDF = spark.sql("SELECT INTERVAL '11' SECOND")
+    assert(secondDF.schema.head.dataType === DayTimeIntervalType(SECOND, SECOND))
+  }
+
+  test("SPARK-35773: Parse year-month interval literals to tightest types") {
+    import YearMonthIntervalType._
+    val yearToMonthDF = spark.sql("SELECT INTERVAL '2021-06' YEAR TO MONTH")
+    assert(yearToMonthDF.schema.head.dataType === YearMonthIntervalType(YEAR, MONTH))
+    val yearDF = spark.sql("SELECT INTERVAL '2022' YEAR")
+    assert(yearDF.schema.head.dataType === YearMonthIntervalType(YEAR, YEAR))
+    val monthDF = spark.sql("SELECT INTERVAL '08' MONTH")
+    assert(monthDF.schema.head.dataType === YearMonthIntervalType(MONTH, MONTH))
   }
 }
 

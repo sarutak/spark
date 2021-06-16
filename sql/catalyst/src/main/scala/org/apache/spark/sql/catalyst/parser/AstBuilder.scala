@@ -2368,7 +2368,8 @@ class AstBuilder extends SqlBaseBaseVisitor[AnyRef] with SQLConfHelper with Logg
       }
     } else if (ctx.errorCapturingMultiUnitsInterval != null && !conf.legacyIntervalEnabled) {
       val units =
-        ctx.errorCapturingMultiUnitsInterval.body.unit.asScala.map(_.getText.stripSuffix("s"))
+        ctx.errorCapturingMultiUnitsInterval.body.unit.asScala.map(
+          _.getText.toLowerCase(Locale.ROOT).stripSuffix("s"))
       if (units.forall(YearMonthIntervalType.stringToField.contains)) {
         val fields = units.map(YearMonthIntervalType.stringToField)
         Literal(calendarInterval.months, YearMonthIntervalType(fields.min, fields.max))
