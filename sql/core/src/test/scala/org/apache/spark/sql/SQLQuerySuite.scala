@@ -20,6 +20,7 @@ package org.apache.spark.sql
 import java.io.File
 import java.net.{MalformedURLException, URL}
 import java.sql.{Date, Timestamp}
+import java.time.Duration
 import java.util.concurrent.atomic.AtomicBoolean
 
 import org.apache.commons.io.FileUtils
@@ -4040,6 +4041,19 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
     assert(yearDF.schema.head.dataType === YearMonthIntervalType(YEAR, YEAR))
     val monthDF = spark.sql("SELECT INTERVAL '08' MONTH")
     assert(monthDF.schema.head.dataType === YearMonthIntervalType(MONTH, MONTH))
+  }
+
+  test("SPARK-35749: Parse multiple unit fields interval literals as day-time interval types") {
+    def dayTimeIntervalToLong(df: DataFrame): Long = {
+      df.map(_.getAs[Duration](0)).collect.head.getSeconds
+    }
+
+    val df1 = spark.sql("SELECT INTERVAL '10' DAY '20' HOUR '30' MINUTE '40' SECOND")
+    assert(dayTimeIntervalToLong(df1) === 937840)
+  }
+
+  test("SPARK-35749: Parse multiple unit fields interval literals as year-month interval types") {
+
   }
 }
 

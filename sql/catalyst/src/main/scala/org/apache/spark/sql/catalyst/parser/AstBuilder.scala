@@ -2372,14 +2372,31 @@ class AstBuilder extends SqlBaseBaseVisitor[AnyRef] with SQLConfHelper with Logg
           _.getText.toLowerCase(Locale.ROOT).stripSuffix("s"))
       if (units.forall(YearMonthIntervalType.stringToField.contains)) {
         val fields = units.map(YearMonthIntervalType.stringToField)
-        Literal(calendarInterval.months, YearMonthIntervalType(fields.min, fields.max))
+        val start = if (0 < IntervalUtils.getYears(calendarInterval)) {
+          YearMonthIntervalType.YEAR
+        } else {
+          fields.min
+        }
+        val end = fields.max
+        Literal(calendarInterval.months, YearMonthIntervalType(start, end))
       } else if (units.forall(DayTimeIntervalType.stringToField.contains)) {
         val micros = IntervalUtils.getDuration(calendarInterval, TimeUnit.MICROSECONDS)
         val fields = units.map(DayTimeIntervalType.stringToField)
-        Literal(micros, DayTimeIntervalType(fields.min, fields.max))
+        val start = if (0 < IntervalUtils.getDays(micros)) {
+          DayTimeIntervalType.DAY
+        } else if (0 < IntervalUtils.getHours(micros)) {
+          DayTimeIntervalType.HOUR
+        } else if (0 < IntervalUtils.getMinutes(micros)) {
+          DayTimeIntervalType.MINUTE
+        } else if (Decimal(0) < IntervalUtils.getSeconds(micros)) {
+          DayTimeIntervalType.SECOND
+        } else {
+          fields.min
+        }
+        val end = fields.max
+        Literal(micros, DayTimeIntervalType(start, end))
       } else if (units.exists(YearMonthIntervalType.stringToField.contains) &&
                  units.exists(DayTimeIntervalType.stringToField.contains)) {
-        // year-month intervals and day-time intervals are mixed.
         throw QueryParsingErrors.mixedIntervalLiteralError(ctx)
       } else {
         throw QueryParsingErrors.unsupportedIntervalUnitError(ctx)
