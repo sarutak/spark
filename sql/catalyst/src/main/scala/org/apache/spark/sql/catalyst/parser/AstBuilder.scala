@@ -2351,15 +2351,16 @@ class AstBuilder extends SqlBaseBaseVisitor[AnyRef] with SQLConfHelper with Logg
       // `CalendarInterval` doesn't have enough info. For instance, new CalendarInterval(0, 0, 0)
       // can be derived from INTERVAL '0-0' YEAR TO MONTH as well as from
       // INTERVAL '0 00:00:00' DAY TO SECOND.
+      val fromUnit =
+        ctx.errorCapturingUnitToUnitInterval.body.from.getText.toLowerCase(Locale.ROOT)
       val toUnit = ctx.errorCapturingUnitToUnitInterval.body.to.getText.toLowerCase(Locale.ROOT)
       if (toUnit == "month") {
         assert(calendarInterval.days == 0 && calendarInterval.microseconds == 0)
-        // TODO(SPARK-35773): Parse year-month interval literals to tightest types
-        Literal(calendarInterval.months, YearMonthIntervalType())
+        val start = YearMonthIntervalType.stringToField(fromUnit)
+        val end = YearMonthIntervalType.stringToField(toUnit)
+        Literal(calendarInterval.months, YearMonthIntervalType(start, end))
       } else {
         assert(calendarInterval.months == 0)
-        val fromUnit =
-          ctx.errorCapturingUnitToUnitInterval.body.from.getText.toLowerCase(Locale.ROOT)
         val micros = IntervalUtils.getDuration(calendarInterval, TimeUnit.MICROSECONDS)
         val start = DayTimeIntervalType.stringToField(fromUnit)
         val end = DayTimeIntervalType.stringToField(toUnit)
@@ -2368,18 +2369,19 @@ class AstBuilder extends SqlBaseBaseVisitor[AnyRef] with SQLConfHelper with Logg
     } else if (ctx.errorCapturingMultiUnitsInterval != null && !conf.legacyIntervalEnabled) {
       val units =
         ctx.errorCapturingMultiUnitsInterval.body.unit.asScala.map(_.getText.stripSuffix("s"))
-
-     if (units.forall(DayTimeIntervalType.stringToField.contains)) {
+      if (units.forall(YearMonthIntervalType.stringToField.contains)) {
+        val fields = units.map(YearMonthIntervalType.stringToField)
+        Literal(calendarInterval.months, YearMonthIntervalType(fields.min, fields.max))
+      } else if (units.forall(DayTimeIntervalType.stringToField.contains)) {
         val micros = IntervalUtils.getDuration(calendarInterval, TimeUnit.MICROSECONDS)
         val fields = units.map(DayTimeIntervalType.stringToField)
         Literal(micros, DayTimeIntervalType(fields.min, fields.max))
-      } else if (units.exists(DayTimeIntervalType.stringToField.contains)) {
+      } else if (units.exists(YearMonthIntervalType.stringToField.contains) &&
+                 units.exists(DayTimeIntervalType.stringToField.contains)) {
         // year-month intervals and day-time intervals are mixed.
         throw QueryParsingErrors.mixedIntervalLiteralError(ctx)
-     } else if (calendarInterval.days != 0 || calendarInterval.microseconds != 0) {
-       Literal(calendarInterval, CalendarIntervalType)
-     } else {
-        Literal(calendarInterval.months, YearMonthIntervalType)
+      } else {
+        throw QueryParsingErrors.unsupportedIntervalUnitError(ctx)
       }
     } else {
       Literal(calendarInterval, CalendarIntervalType)

@@ -22,6 +22,7 @@ import org.antlr.v4.runtime.ParserRuleContext
 import org.apache.spark.sql.catalyst.parser.ParseException
 import org.apache.spark.sql.catalyst.parser.SqlBaseParser._
 import org.apache.spark.sql.catalyst.trees.Origin
+import org.apache.spark.sql.types.{DayTimeIntervalType, YearMonthIntervalType}
 
 /**
  * Object for grouping all error messages of the query parsing.
@@ -208,6 +209,14 @@ object QueryParsingErrors {
 
   def mixedIntervalLiteralError(ctx: IntervalContext): Throwable = {
     new ParseException("year-month and day-time intervals cannot be mixed", ctx)
+  }
+
+  def unsupportedIntervalUnitError(ctx: IntervalContext): Throwable = {
+    val supportedUnits =
+      (YearMonthIntervalType.yearMonthFields.map(YearMonthIntervalType.fieldToString) ++
+        DayTimeIntervalType.dayTimeFields.map(DayTimeIntervalType.fieldToString))
+        .mkString("[", ", ", "]")
+    new ParseException(s"Only $supportedUnits are supported for interval units", ctx)
   }
 
   def dataTypeUnsupportedError(dataType: String, ctx: PrimitiveDataTypeContext): Throwable = {
