@@ -2423,10 +2423,10 @@ object DatePart {
        224
       > SELECT _FUNC_('SECONDS', timestamp'2019-10-01 00:00:01.000001');
        1.000001
-      > SELECT _FUNC_('days', interval 1 year 10 months 5 days);
+      > SELECT _FUNC_('days', interval 5 days 3 hours 7 minutes);
        5
-      > SELECT _FUNC_('seconds', interval 5 hours 30 seconds 1 milliseconds 1 microseconds);
-       30.001001
+      > SELECT _FUNC_('seconds', interval 5 hours 30 seconds);
+       30.000000
       > SELECT _FUNC_('MONTH', INTERVAL '2021-11' YEAR TO MONTH);
        11
       > SELECT _FUNC_('MINUTE', INTERVAL '123 23:55:59.002001' DAY TO SECOND);
@@ -2492,10 +2492,10 @@ case class DatePart(field: Expression, source: Expression, child: Expression)
        224
       > SELECT _FUNC_(SECONDS FROM timestamp'2019-10-01 00:00:01.000001');
        1.000001
-      > SELECT _FUNC_(days FROM interval 1 year 10 months 5 days);
+      > SELECT _FUNC_(days FROM interval 5 days 3 hours 7 minutes);
        5
-      > SELECT _FUNC_(seconds FROM interval 5 hours 30 seconds 1 milliseconds 1 microseconds);
-       30.001001
+      > SELECT _FUNC_(seconds FROM interval 5 hours 30 seconds);
+       30.000000
       > SELECT _FUNC_(MONTH FROM INTERVAL '2021-11' YEAR TO MONTH);
        11
       > SELECT _FUNC_(MINUTE FROM INTERVAL '123 23:55:59.002001' DAY TO SECOND);

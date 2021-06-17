@@ -112,6 +112,9 @@ class ThriftServerQueryTestSuite extends SQLQueryTestSuite with SharedThriftServ
           statement.execute(s"SET ${SQLConf.LEGACY_INTERVAL_ENABLED.key} = true")
         case _: AnsiTest =>
           statement.execute(s"SET ${SQLConf.ANSI_ENABLED.key} = true")
+        case _: LegacyIntervalTestCase =>
+          statement.execute(s"SET ${SQLConf.ANSI_ENABLED.key} = false")
+          statement.execute(s"SET ${SQLConf.LEGACY_INTERVAL_ENABLED.key} = true")
         case _ =>
           statement.execute(s"SET ${SQLConf.ANSI_ENABLED.key} = false")
       }
@@ -244,6 +247,9 @@ class ThriftServerQueryTestSuite extends SQLQueryTestSuite with SharedThriftServ
         PgSQLTestCase(testCaseName, absPath, resultFile) :: Nil
       } else if (file.getAbsolutePath.startsWith(s"$inputFilePath${File.separator}ansi")) {
         AnsiTestCase(testCaseName, absPath, resultFile) :: Nil
+      } else if (file.getAbsolutePath.startsWith(
+                   s"$inputFilePath${File.separator}legacy_interval")) {
+        LegacyIntervalTestCase(testCaseName, absPath, resultFile) :: Nil
       } else {
         RegularTestCase(testCaseName, absPath, resultFile) :: Nil
       }
