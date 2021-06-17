@@ -717,8 +717,8 @@ class HiveThriftBinaryServerSuite extends HiveThriftServer2Test {
            |  AND v1.c = v2.c
            |""".stripMargin)
       while (rs.next()) {
-        assert(rs.getString("a1") === "1 days")
-        assert(rs.getString("a2") === "1 days")
+        assert(rs.getString("a1") === "1 00:00:00.000000000")
+        assert(rs.getString("a2") === "1 00:00:00.000000000")
         assert(rs.getString("b1") === "2-1")
         assert(rs.getString("b2") === "2-1")
         assert(rs.getString("c1") === "3 01:01:01.000000000")
