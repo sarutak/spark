@@ -36,6 +36,10 @@ object MimaExcludes {
 
   // Exclude rules for 3.3.x
   lazy val v33excludes = v32excludes ++ Seq(
+    ProblemFilters.exclude[IncompatibleResultTypeProblem]("org.apache.spark.ml.param.FloatParam.jValueEncode"),
+    ProblemFilters.exclude[IncompatibleMethTypeProblem]("org.apache.spark.ml.param.FloatParam.jValueDecode"),
+    ProblemFilters.exclude[IncompatibleMethTypeProblem]("org.apache.spark.mllib.tree.model.TreeEnsembleModel#SaveLoadV1_0.readMetadata"),
+    ProblemFilters.exclude[IncompatibleResultTypeProblem]("org.apache.spark.sql.expressions.MutableAggregationBuffer.jsonValue")
   )
 
   // Exclude rules for 3.2.x
