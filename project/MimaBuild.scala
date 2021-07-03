@@ -88,7 +88,7 @@ object MimaBuild {
     val organization = "org.apache.spark"
     val previousSparkVersion = "3.0.0"
     val project = projectRef.project
-    val fullId = "spark-" + project + "_2.12"
+    val fullId = "spark-" + project + "_2.13"
 
     Seq(
       mimaFailOnNoPrevious := true,
