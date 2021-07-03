@@ -649,7 +649,7 @@ def main():
     print("[info] Using build tool", build_tool, "with Hadoop profile", hadoop_version,
           "and Hive profile", hive_version, "under environment", test_env)
     extra_profiles = get_hadoop_profiles(hadoop_version) + get_hive_profiles(hive_version)
-
+    extra_profiles.append("-Pscala-2.13")
     changed_modules = []
     changed_files = []
     included_tags = []
