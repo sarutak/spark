@@ -175,7 +175,6 @@ echo "Using \`mvn\` from path: $MVN_BIN" 1>&2
 
 # call the `mvn` command as usual
 # SPARK-25854
-"${MVN_BIN}" "$@"
-MVN_RETCODE=$?
+exec "${MVN_BIN}" "$@"
 
-exit $MVN_RETCODE
+
