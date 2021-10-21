@@ -335,6 +335,7 @@ jobs:
       GITHUB_PREV_SHA: ${{ github.event.before }}
       SPARK_LOCAL_IP: localhost
       SKIP_MIMA: true
+      SCALA_PROFILE: scala2.13
     steps:
     - name: Checkout Spark repository
       uses: actions/checkout@v2
