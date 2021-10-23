@@ -2674,10 +2674,11 @@
               <arg>-target:jvm-1.8</arg>
               <arg>-Xfatal-warnings</arg>
               <arg>-Ywarn-unused:imports</arg>
+              <arg>-J-Xss512m</arg>
               <arg>-P:silencer:globalFilters=.*deprecated.*</arg>
             </args>
             <jvmArgs>
-              <jvmArg>-Xss1g</jvmArg>
+              <jvmArg>-Xss256m</jvmArg>
               <jvmArg>-Xms4g</jvmArg>
               <jvmArg>-Xmx4g</jvmArg>
               <jvmArg>-XX:MaxMetaspaceSize=2g</jvmArg>
