@@ -94,6 +94,20 @@ $env:MAVEN_OPTS = "-Xmx2g -XX:ReservedCodeCacheSize=1g"
 
 Pop-Location
 
+# ========================== SBT
+Push-Location $tools
+
+$sbtVer = "1.5.5"
+Start-FileDownload "https://github.com/sbt/sbt/releases/download/v$sbtVer/sbt-$sbtVer.zip" "sbt.zip"
+
+# extract
+Invoke-Expression "7z.exe x sbt.zip"
+
+# add maven to environment variables
+$env:PATH = "$tools\sbt-$sbtVer\bin;" + $env:PATH
+
+Pop-Location
+
 # ========================== Hadoop bin package
 # This must match the version at https://github.com/cdarlint/winutils/tree/master/hadoop-3.2.0
 $hadoopVer = "3.2.0"
