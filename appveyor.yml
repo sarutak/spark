@@ -51,7 +51,7 @@ build_script:
   # Ideally we should check the tests related to Hive in SparkR as well (SPARK-31745).
   - cmd: mvn -DskipTests -Psparkr -Djna.nosys=true -pl core compile
   - cmd: mvn -DskipTests -Psparkr -Djna.nosys=true -pl sql/core compile
-  - cmd: mvn -DskipTests -Psparkr -Djna.nosys=true -pl sql/catalyst compile
+  - cmd: mvn -X -DskipTests -Psparkr -Djna.nosys=true -pl sql/catalyst compile
   - cmd: mvn -DskipTests -Psparkr -Djna.nosys=true package
 
 environment:
