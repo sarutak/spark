@@ -50,8 +50,10 @@ build_script:
   # See SPARK-28759.
   # Ideally we should check the tests related to Hive in SparkR as well (SPARK-31745).
   - cmd: set SBT_MAVEN_PROFILES=-Psparkr
-  - cmd: sbt -J-Djna.nosys=true package
+  - cmd: set JAVA_OPTS=-Djna.nosys=true
+  - cmd: sbt package
   - cmd: set SBT_MAVEN_PROFILES=
+  - cmd: set JAVA_OPTIONS=
 
 environment:
   NOT_CRAN: true
