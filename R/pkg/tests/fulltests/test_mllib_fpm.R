@@ -71,7 +71,7 @@ test_that("spark.fpGrowth", {
 
     expect_equivalent(
       itemsets,
-      collect(spark.freqItemsets(loaded_model)))
+      collect(orderBy(spark.freqItemsets(loaded_model), "items")))
 
     unlink(modelPath)
   }
