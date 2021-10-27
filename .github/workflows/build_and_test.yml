@@ -478,8 +478,8 @@ jobs:
         gem install bundler
         cd docs
         bundle install
-#    - name: Scala linter
-#      run: ./dev/lint-scala
+    - name: Scala linter
+      run: ./dev/lint-scala
 #    - name: Java linter
 #      run: ./dev/lint-java
     - name: Python linter
