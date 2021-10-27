@@ -476,7 +476,7 @@ jobs:
         bundle install
     - name: Change Scala version
       run: |
-        if [[ "$SCALA_PROFILE" == "scala2.13" ]]; then
+        if [ "$SCALA_PROFILE" == "scala2.13" ]; then
           ./dev/change-scala-version.sh 2.13
         fi
     - name: Scala linter
