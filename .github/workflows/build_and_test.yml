@@ -490,8 +490,8 @@ jobs:
       run: ./dev/lint-js
     - name: License test
       run: ./dev/check-license
-#    - name: Dependencies test
-#      run: ./dev/test-dependencies.sh
+    - name: Dependencies test
+      run: ./dev/test-dependencies.sh
     - name: Run documentation build
       run: |
         ./dev/change-scala-version.sh 2.13
