@@ -58,11 +58,10 @@ SCALA_BINARY_VERSION=$($MVN -q \
     -Dexec.args='${scala.binary.version}' \
     --non-recursive \
     org.codehaus.mojo:exec-maven-plugin:1.6.0:exec | grep -E '[0-9]+\.[0-9]+')
-if [[ "$SCALA_BINARY_VERSION" != "2.12" ]]; then
-  # TODO(SPARK-36168) Support Scala 2.13 in dev/test-dependencies.sh
-  echo "Skip dependency testing on $SCALA_BINARY_VERSION"
-  exit 0
+if [ "$SCALA_BINARY_VERSION" == "2.13" ]; then
+  HADOOP_MODULE_PROFILES="-Pscala-2.13 $HADOOP_MODULE_PROFILES"
 fi
+
 set -e
 TEMP_VERSION="spark-$(python3 -S -c "import random; print(random.randrange(100000, 999999))")"
 
@@ -116,10 +115,11 @@ for HADOOP_HIVE_PROFILE in "${HADOOP_HIVE_PROFILES[@]}"; do
     }' | sort | grep -v spark > dev/pr-deps/spark-deps-$HADOOP_HIVE_PROFILE
 done
 
+DEPS_DIR=dev/deps/scala-$SCALA_BINARY_VERSION
 if [[ $@ == **replace-manifest** ]]; then
-  echo "Replacing manifests and creating new files at dev/deps"
-  rm -rf dev/deps
-  mv dev/pr-deps dev/deps
+  echo "Replacing manifests and creating new files at ${DEPS_DIR}"
+  rm -rf "${DEPS_DIR}"
+  mv dev/pr-deps "${DEPS_DIR}"
   exit 0
 fi
 
@@ -128,7 +128,7 @@ for HADOOP_HIVE_PROFILE in "${HADOOP_HIVE_PROFILES[@]}"; do
   dep_diff="$(
     git diff \
     --no-index \
-    dev/deps/spark-deps-$HADOOP_HIVE_PROFILE \
+    ${DEPS_DIR}/spark-deps-$HADOOP_HIVE_PROFILE \
     dev/pr-deps/spark-deps-$HADOOP_HIVE_PROFILE \
   )"
   set -e
