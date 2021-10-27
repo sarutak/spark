@@ -439,6 +439,10 @@ jobs:
         key: docs-maven-${{ hashFiles('**/pom.xml') }}
         restore-keys: |
           docs-maven-
+    - name: Install Java 8
+      uses: actions/setup-java@v1
+      with:
+        java-version: 8
     - name: Install Python linter dependencies
       run: |
         # TODO(SPARK-32407): Sphinx 3.1+ does not correctly index nested classes.
