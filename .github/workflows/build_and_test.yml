@@ -474,11 +474,6 @@ jobs:
         gem install bundler
         cd docs
         bundle install
-    - name: Change Scala version
-      run: |
-        if [ "$SCALA_PROFILE" == "scala2.13" ]; then
-          ./dev/change-scala-version.sh 2.13
-        fi
     - name: Scala linter
       run: ./dev/lint-scala
     - name: Java linter
@@ -495,6 +490,7 @@ jobs:
       run: ./dev/test-dependencies.sh
     - name: Run documentation build
       run: |
+        ./dev/change-scala-version.sh 2.13
         cd docs
         bundle exec jekyll build
 
