@@ -480,8 +480,8 @@ jobs:
         bundle install
     - name: Scala linter
       run: ./dev/lint-scala
-#    - name: Java linter
-#      run: ./dev/lint-java
+    - name: Java linter
+      run: ./dev/lint-java
     - name: Python linter
       run: PYTHON_EXECUTABLE=python3.9 ./dev/lint-python
     - name: R linter
