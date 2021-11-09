@@ -58,13 +58,13 @@ SCALA_BINARY_VERSION=$($MVN -q \
     -Dexec.args='${scala.binary.version}' \
     --non-recursive \
     org.codehaus.mojo:exec-maven-plugin:1.6.0:exec | grep -E '[0-9]+\.[0-9]+')
-#GUAVA_VERSION=`build/mvn help:evaluate -Dexpression=guava.version -q -DforceStdout`
-#build/mvn dependency:get -Dartifact=com.google.guava:guava:${GUAVA_VERSION} -q
-#if [[ "$SCALA_BINARY_VERSION" != "2.12" ]]; then
+GUAVA_VERSION=`build/mvn help:evaluate -Dexpression=guava.version -q -DforceStdout`
+build/mvn dependency:get -Dartifact=com.google.guava:guava:${GUAVA_VERSION} -q
+if [[ "$SCALA_BINARY_VERSION" != "2.12" ]]; then
   # TODO(SPARK-36168) Support Scala 2.13 in dev/test-dependencies.sh
-#  echo "Skip dependency testing on $SCALA_BINARY_VERSION"
-#  exit 0
-#fi
+  echo "Skip dependency testing on $SCALA_BINARY_VERSION"
+  exit 0
+fi
 set -e
 TEMP_VERSION="spark-$(python3 -S -c "import random; print(random.randrange(100000, 999999))")"
 
