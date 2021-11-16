@@ -688,7 +688,7 @@ jobs:
       run: build/sbt -Pscala-2.13 "sql/test:runMain org.apache.spark.sql.GenTPCDSData --dsdgenDir `pwd`/tpcds-kit/tools --location `pwd`/tpcds-sf-1 --scaleFactor 1 --numPartitions 1 --overwrite"
     - name: Run TPC-DS queries
       run: |
-        SPARK_TPCDS_DATA=`pwd`/tpcds-sf-1 build/sbt "-Pscala-2.13 sql/testOnly org.apache.spark.sql.TPCDSQueryTestSuite"
+        SPARK_TPCDS_DATA=`pwd`/tpcds-sf-1 build/sbt -Pscala-2.13 "sql/testOnly org.apache.spark.sql.TPCDSQueryTestSuite"
     - name: Upload test results to report
       if: always()
       uses: actions/upload-artifact@v2
