@@ -608,7 +608,10 @@ private[spark] class AppStatusListener(
         speculationSummary.numTasks += 1
       }
       if(stage.speculationStageSummary.isDefined) {
-        maybeUpdate(stage.speculationStageSummary.get, now)
+        val isUpdated = maybeUpdate(stage.speculationStageSummary.get, now)
+        if (isUpdated) {
+          stage.speculationStageSummary = None
+        }
       }
 
       stage.activeTasks += 1
@@ -772,7 +775,10 @@ private[spark] class AppStatusListener(
         if (isLastTask) {
           update(stage.speculationStageSummary.get, now)
         } else {
-          maybeUpdate(stage.speculationStageSummary.get, now)
+          val isUpdated = maybeUpdate(stage.speculationStageSummary.get, now)
+          if (isUpdated) {
+            stage.speculationStageSummary = None
+          }
         }
       }
 
@@ -1243,9 +1249,12 @@ private[spark] class AppStatusListener(
   }
 
   /** Update a live entity only if it hasn't been updated in the last configured period. */
-  private def maybeUpdate(entity: LiveEntity, now: Long): Unit = {
+  private def maybeUpdate(entity: LiveEntity, now: Long): Boolean = {
     if (live && liveUpdatePeriodNs >= 0 && now - entity.lastWriteTime > liveUpdatePeriodNs) {
       update(entity, now)
+      true
+    } else {
+      false
     }
   }
 
