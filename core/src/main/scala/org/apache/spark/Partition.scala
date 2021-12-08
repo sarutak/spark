@@ -26,7 +26,7 @@ trait Partition extends Serializable {
    */
   def index: Int
 
-  // A better default implementation of HashCode
+  // A better default implementation of HashCode test
   override def hashCode(): Int = index
 
   override def equals(other: Any): Boolean = super.equals(other)
