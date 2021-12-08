@@ -64,12 +64,12 @@ jobs:
           echo '::set-output name=type::scheduled'
           echo '::set-output name=envs::{"SCALA_PROFILE": "scala2.13"}'
           echo '::set-output name=hadoop::hadoop3'
-        elif [ "${{ github.event.schedule }}" = "0 7 * * *" ]; then
+        elif [ "true" ]; then
           echo '::set-output name=java::8'
           echo '::set-output name=branch::branch-3.2'
-          echo '::set-output name=type::scheduled'
+          echo '::set-output name=type::regular'
           echo '::set-output name=envs::{"SCALA_PROFILE": "scala2.13"}'
-          echo '::set-output name=hadoop::hadoop3'
+          echo '::set-output name=hadoop::hadoop3.2'
         elif [ "${{ github.event.schedule }}" = "0 10 * * *" ]; then
           echo '::set-output name=java::8'
           echo '::set-output name=branch::master'
@@ -177,13 +177,13 @@ jobs:
         fetch-depth: 0
         repository: apache/spark
         ref: ${{ needs.configure-jobs.outputs.branch }}
-    - name: Sync the current branch with the latest in Apache Spark
-      if: github.repository != 'apache/spark'
-      run: |
-        echo "APACHE_SPARK_REF=$(git rev-parse HEAD)" >> $GITHUB_ENV
-        git fetch https://github.com/$GITHUB_REPOSITORY.git ${GITHUB_REF#refs/heads/}
-        git -c user.name='Apache Spark Test Account' -c user.email='sparktestacc@gmail.com' merge --no-commit --progress --squash FETCH_HEAD
-        git -c user.name='Apache Spark Test Account' -c user.email='sparktestacc@gmail.com' commit -m "Merged commit"
+#    - name: Sync the current branch with the latest in Apache Spark
+#      if: github.repository != 'apache/spark'
+#      run: |
+#        echo "APACHE_SPARK_REF=$(git rev-parse HEAD)" >> $GITHUB_ENV
+#        git fetch https://github.com/$GITHUB_REPOSITORY.git ${GITHUB_REF#refs/heads/}
+#        git -c user.name='Apache Spark Test Account' -c user.email='sparktestacc@gmail.com' merge --no-commit --progress --squash FETCH_HEAD
+#        git -c user.name='Apache Spark Test Account' -c user.email='sparktestacc@gmail.com' commit -m "Merged commit"
     # Cache local repositories. Note that GitHub Actions cache has a 2G limit.
     - name: Cache Scala, SBT and Maven
       uses: actions/cache@v2

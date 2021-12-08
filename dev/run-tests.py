@@ -626,7 +626,8 @@ def main():
         # We're likely in the forked repository
         is_apache_spark_ref = os.environ.get("APACHE_SPARK_REF", "") != ""
         # We're likely in the main repo build.
-        is_github_prev_sha = os.environ.get("GITHUB_PREV_SHA", "") != ""
+#        is_github_prev_sha = os.environ.get("GITHUB_PREV_SHA", "") != ""
+        is_github_prev_sha = False
         # Otherwise, we're in either periodic job in Github Actions or somewhere else.
 
         # If we're running the tests in GitHub Actions, attempt to detect and test
