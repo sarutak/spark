@@ -32,7 +32,7 @@ import org.apache.spark.util.Utils
  * after creating it -- you cannot create it, check some condition, and then decide to ignore it
  * (or risk triggering any other exceptions).  See SPARK-19276.
  */
-private[spark] class FetchFailedException(
+class FetchFailedException(
     bmAddress: BlockManagerId,
     shuffleId: Int,
     mapId: Int,

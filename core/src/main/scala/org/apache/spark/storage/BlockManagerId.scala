@@ -106,7 +106,7 @@ class BlockManagerId private (
 }
 
 
-private[spark] object BlockManagerId {
+object BlockManagerId {
 
   /**
    * Returns a [[org.apache.spark.storage.BlockManagerId]] for the given configuration.

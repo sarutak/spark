@@ -779,6 +779,7 @@ private[spark] class ExecutorAllocationManager(
             stageIdToTaskIndices.get(stageId).foreach {_.remove(taskIndex)}
           }
         }
+        logInfo(s"The number of executors needed: ${maxNumExecutorsNeeded()}")
       }
     }
 
