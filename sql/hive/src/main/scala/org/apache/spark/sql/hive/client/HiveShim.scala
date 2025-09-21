@@ -17,7 +17,7 @@
 
 package org.apache.spark.sql.hive.client
 
-import java.lang.{Boolean => JBoolean, Integer => JInteger, Long => JLong}
+import java.lang.{Boolean => JBoolean, Integer => JInteger, Long => JLong, Short => JShort}
 import java.lang.reflect.{InvocationTargetException, Method}
 import java.util.{ArrayList => JArrayList, List => JList, Locale, Map => JMap}
 import java.util.concurrent.TimeUnit
@@ -29,11 +29,11 @@ import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
 import org.apache.hadoop.hive.conf.HiveConf
 import org.apache.hadoop.hive.metastore.{IMetaStoreClient, PartitionDropOptions, TableType}
-import org.apache.hadoop.hive.metastore.api.{Database, EnvironmentContext, Function => HiveFunction, FunctionType, Index, MetaException, PrincipalType, ResourceType, ResourceUri}
+import org.apache.hadoop.hive.metastore.api.{Database, EnvironmentContext, Function => HiveFunction, FunctionType, MetaException, PrincipalType, ResourceType, ResourceUri}
 import org.apache.hadoop.hive.ql.Driver
 import org.apache.hadoop.hive.ql.io.AcidUtils
 import org.apache.hadoop.hive.ql.metadata.{Hive, HiveException, Partition, Table}
-import org.apache.hadoop.hive.ql.plan.{AddPartitionDesc, DynamicPartitionCtx}
+import org.apache.hadoop.hive.ql.plan.DynamicPartitionCtx
 import org.apache.hadoop.hive.ql.processors.{CommandProcessor, CommandProcessorFactory}
 import org.apache.hadoop.hive.ql.session.SessionState
 import org.apache.hadoop.hive.serde.serdeConstants
@@ -235,7 +235,7 @@ private[client] sealed abstract class Shim {
 
   def getMSC(hive: Hive): IMetaStoreClient
 
-  def getIndexes(hive: Hive, dbName: String, tableName: String, max: Short): Seq[Index]
+  def getIndexes(hive: Hive, dbName: String, tableName: String, max: Short): Seq[Any]
 
   protected def findMethod(klass: Class[_], name: String, args: Class[_]*): Method = {
     klass.getMethod(name, args: _*)
@@ -263,6 +263,27 @@ private[client] class Shim_v2_0 extends Shim with Logging {
 
   override def getMSC(hive: Hive): IMetaStoreClient = hive.getMSC
 
+  private lazy val clazzAddPartitionDescType = getClass.getClassLoader.loadClass(
+    "org.apache.hadoop.hive.ql.plan.AddPartitionDesc")
+  private lazy val clazzOnePartitionDescType = getClass.getClassLoader.loadClass(
+    "org.apache.hadoop.hive.ql.plan.AddPartitionDesc$OnePartitionDesc")
+
+  private lazy val addPartitionMethod =
+    findMethod(
+      clazzAddPartitionDescType,
+      "addPartition",
+      classOf[JMap[String, String]],
+      classOf[String])
+  private lazy val getPartitionMethod =
+    findMethod(
+      clazzAddPartitionDescType,
+      "getPartition",
+      JInteger.TYPE)
+  private lazy val setPartParamsMethod =
+    findMethod(
+      clazzOnePartitionDescType,
+      "setPartParams",
+      classOf[JMap[String, String]])
   private lazy val loadPartitionMethod =
     findMethod(
       classOf[Hive],
@@ -309,6 +330,35 @@ private[client] class Shim_v2_0 extends Shim with Logging {
       "alterPartitions",
       classOf[String],
       classOf[JList[Partition]])
+  private lazy val dropIndexMethod =
+    findMethod(
+      classOf[Hive],
+      "dropIndex",
+      classOf[String],
+      classOf[String],
+      classOf[String],
+      JBoolean.TYPE,
+      JBoolean.TYPE)
+  private lazy val getIndexesMethod =
+    findMethod(
+      classOf[Hive],
+      "getIndexes",
+      classOf[String],
+      classOf[String],
+      JShort.TYPE)
+  private lazy val renamePartitionMethod =
+    findMethod(
+      classOf[Hive],
+      "renamePartition",
+      classOf[Table],
+      classOf[JMap[String, String]],
+      classOf[Partition])
+  private lazy val createPartitionsMethod =
+    findMethod(
+      classOf[Hive],
+      "createPartitions",
+      clazzAddPartitionDescType)
+
 
   override def setCurrentSessionState(state: SessionState): Unit =
     SessionState.setCurrentSessionState(state)
@@ -324,16 +374,24 @@ private[client] class Shim_v2_0 extends Shim with Logging {
       table: Table,
       parts: Seq[CatalogTablePartition],
       ignoreIfExists: Boolean): Unit = {
-    val addPartitionDesc = new AddPartitionDesc(table.getDbName, table.getTableName, ignoreIfExists)
+    val addPartitionDesc = clazzAddPartitionDescType
+      .getConstructor(
+        classOf[String],
+        classOf[String],
+        JBoolean.TYPE)
+      .newInstance(table.getDbName, table.getTableName, ignoreIfExists)
     parts.zipWithIndex.foreach { case (s, i) =>
-      addPartitionDesc.addPartition(
-        s.spec.asJava, s.storage.locationUri.map(CatalogUtils.URIToString).orNull)
+      addPartitionMethod.invoke(
+        addPartitionDesc,
+        s.spec.asJava,
+        s.storage.locationUri.map(CatalogUtils.URIToString).orNull)
       if (s.parameters.nonEmpty) {
-        addPartitionDesc.getPartition(i).setPartParams(s.parameters.asJava)
+        val onePartitionDesc = getPartitionMethod.invoke(addPartitionDesc, i)
+        setPartParamsMethod.invoke(onePartitionDesc, s.parameters.asJava)
       }
     }
     recordHiveCall()
-    hive.createPartitions(addPartitionDesc)
+    createPartitionsMethod.invoke(hive, addPartitionDesc)
   }
 
   override def getAllPartitions(hive: Hive, table: Table): Seq[Partition] = {
@@ -518,7 +576,8 @@ private[client] class Shim_v2_0 extends Shim with Logging {
 
   override def dropIndex(hive: Hive, dbName: String, tableName: String, indexName: String): Unit = {
     recordHiveCall()
-    hive.dropIndex(dbName, tableName, indexName, throwExceptionInDropIndex, deleteDataInDropIndex)
+    dropIndexMethod.invoke(
+      hive, dbName, tableName, indexName, throwExceptionInDropIndex, deleteDataInDropIndex)
   }
 
   override def dropTable(
@@ -995,16 +1054,16 @@ private[client] class Shim_v2_0 extends Shim with Logging {
       oldPartSpec: JMap[String, String],
       newPart: Partition): Unit = {
     recordHiveCall()
-    hive.renamePartition(table, oldPartSpec, newPart)
+    renamePartitionMethod.invoke(hive, table, oldPartSpec, newPart)
   }
 
   override def getIndexes(
       hive: Hive,
       dbName: String,
       tableName: String,
-      max: Short): Seq[Index] = {
+      max: Short): Seq[Any] = {
     recordHiveCall()
-    hive.getIndexes(dbName, tableName, max).asScala.toSeq
+    getIndexesMethod.invoke(hive, dbName, tableName, max).asInstanceOf[JList[Any]].asScala.toSeq
   }
 }
 

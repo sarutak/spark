@@ -37,7 +37,6 @@ import org.apache.hadoop.hive.metastore.{HiveMetaStoreClient, IMetaStoreClient, 
 import org.apache.hadoop.hive.metastore.api.{Database => HiveDatabase, Table => MetaStoreApiTable, _}
 import org.apache.hadoop.hive.ql.Driver
 import org.apache.hadoop.hive.ql.metadata.{Hive, HiveException, Partition => HivePartition, Table => HiveTable}
-import org.apache.hadoop.hive.ql.parse.BaseSemanticAnalyzer.HIVE_COLUMN_ORDER_ASC
 import org.apache.hadoop.hive.ql.processors._
 import org.apache.hadoop.hive.ql.session.SessionState
 import org.apache.hadoop.hive.serde.serdeConstants
@@ -473,7 +472,8 @@ private[hive] class HiveClientImpl(
       // are sorted in ascending order, only then propagate the sortedness information
       // to downstream processing / optimizations in Spark
       // TODO: In future we can have Spark support columns sorted in descending order
-      val allAscendingSorted = sortColumnOrders.forall(_.getOrder == HIVE_COLUMN_ORDER_ASC)
+      val allAscendingSorted =
+          sortColumnOrders.forall(_.getOrder == HiveClientImpl.HIVE_COLUMN_ORDER_ASC)
 
       val sortColumnNames = if (allAscendingSorted) {
         sortColumnOrders.map(_.getCol)
@@ -875,14 +875,14 @@ private[hive] class HiveClientImpl(
       // Since HIVE-18238(Hive 3.0.0), the Driver.close function's return type changed
       // and the CommandProcessorFactory.clean function removed.
       driver.getClass.getMethod("close").invoke(driver)
-      if (version != hive.v3_0 && version != hive.v3_1 && version != hive.v4_0) {
-        CommandProcessorFactory.clean(conf)
+      if (version < hive.v3_0) {
+        classOf[CommandProcessorFactory].getMethod("clean", conf.getClass).invoke(null, conf)
       }
     }
 
     def getResponseCode(response: CommandProcessorResponse): Int = {
       if (version < hive.v4_0) {
-        response.getResponseCode
+        response.getClass.getMethod("getResponseCode").invoke(response).asInstanceOf[Int]
       } else {
         // Since Hive 4.0, response code is removed from CommandProcessorResponse.
         // Here we simply return 0 for the positive cases as for error cases it will
@@ -908,7 +908,13 @@ private[hive] class HiveClientImpl(
             if (getResponseCode(response) != 0) {
               // Throw an exception if there is an error in query processing.
               // This works for hive 3.x and earlier versions.
-              throw new QueryExecutionException(response.getErrorMessage)
+              assert(version < hive.v4_0)
+              val errorMessage = response
+                .getClass
+                .getMethod("getErrorMessage")
+                .invoke(response)
+                .asInstanceOf[String]
+              throw new QueryExecutionException(errorMessage)
             }
             driver.setMaxRows(maxRows)
             val results = shim.getDriverResults(driver)
@@ -938,7 +944,13 @@ private[hive] class HiveClientImpl(
             // Throw an exception if there is an error in query processing.
             // This works for hive 3.x and earlier versions. For 4.x and later versions,
             // It will go to the catch block directly.
-            throw new QueryExecutionException(response.getErrorMessage)
+            assert(version < hive.v4_0)
+            val errorMessage = response
+              .getClass
+              .getMethod("getErrorMessage")
+              .invoke(response)
+              .asInstanceOf[String]
+            throw new QueryExecutionException(errorMessage)
           }
           Seq(responseCode.toString)
       }
@@ -1064,13 +1076,17 @@ private[hive] class HiveClientImpl(
       logDebug(s"Deleting table $t")
       try {
         shim.getIndexes(client, "default", t, 255).foreach { index =>
-          shim.dropIndex(client, "default", t, index.getIndexName)
+          shim.dropIndex(
+            client,
+            "default",
+            t,
+            index.getClass.getMethod("getIndexName").invoke(index).asInstanceOf[String])
         }
-        if (!table.isIndexTable) {
+        if (!table.getClass.getMethod("isIndexTable").invoke(table).asInstanceOf[Boolean]) {
           shim.dropTable(client, "default", t)
         }
       } catch {
-        case _: NoSuchMethodError =>
+        case _: NoSuchMethodException =>
           // HIVE-18448 Hive 3.0 remove index APIs
           shim.dropTable(client, "default", t)
       }
@@ -1102,6 +1118,10 @@ private[hive] object HiveClientImpl extends Logging {
     }
     new FieldSchema(c.name, typeString, c.getComment().orNull)
   }
+
+  // TODO: Replace HIVE_COLUMN_ORDER_ASC with DirectionUtils.ASCENDING_CODE after builtin Hive 2.3
+  // support is dropped.
+  val HIVE_COLUMN_ORDER_ASC = 0
 
   /** Get the Spark SQL native DataType from Hive's FieldSchema. */
   private def getSparkSQLDataType(hc: FieldSchema): DataType = {
