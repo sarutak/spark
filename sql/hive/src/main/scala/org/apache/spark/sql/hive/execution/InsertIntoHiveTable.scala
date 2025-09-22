@@ -19,7 +19,6 @@ package org.apache.spark.sql.hive.execution
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
-import org.apache.hadoop.hive.conf.HiveConf
 import org.apache.hadoop.hive.ql.plan.FileSinkDesc
 import org.apache.hadoop.hive.ql.plan.TableDesc
 
@@ -146,9 +145,13 @@ case class InsertIntoHiveTable(
       if (numDynamicPartitions > 0) {
         if (overwrite && table.tableType == CatalogTableType.EXTERNAL) {
           val numWrittenParts = writtenParts.size
-          val maxDynamicPartitionsKey = HiveConf.ConfVars.DYNAMICPARTITIONMAXPARTS.varname
-          val maxDynamicPartitions = hadoopConf.getInt(maxDynamicPartitionsKey,
-            HiveConf.ConfVars.DYNAMICPARTITIONMAXPARTS.defaultIntVal)
+          // TODO: Replace the property name with DYNAMIC_PARTITION_MAX_PARTS.varname and the magic
+          // number 1000 with DYNAMIC_PARTITION_MAX_PARTS.defaultIntVal after Hive 2.3 support is
+          // dropped.
+          val maxDynamicPartitionsKey = "hive.exec.max.dynamic.partitions"
+          // The default values for both ConfVars.DYNAMICPARTITIONMAXPARTS (Hive 2.3) and
+          // DYNAMIC_PARTITION_MAX_PARTS (Hive 4.1) are 1000.
+          val maxDynamicPartitions = hadoopConf.getInt(maxDynamicPartitionsKey, 1000)
           if (numWrittenParts > maxDynamicPartitions) {
             throw QueryExecutionErrors.writePartitionExceedConfigSizeWhenDynamicPartitionError(
               numWrittenParts, maxDynamicPartitions, maxDynamicPartitionsKey)

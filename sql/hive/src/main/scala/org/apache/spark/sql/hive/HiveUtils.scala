@@ -29,7 +29,6 @@ import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
 import org.apache.hadoop.hive.common.FileUtils
 import org.apache.hadoop.hive.conf.HiveConf
-import org.apache.hadoop.hive.conf.HiveConf.ConfVars
 import org.apache.hadoop.hive.ql.session.SessionState
 import org.apache.hadoop.util.VersionInfo
 import org.apache.hive.common.util.HiveVersionInfo
@@ -489,9 +488,9 @@ private[spark] object HiveUtils extends Logging {
     // The execution client will generate garbage events, therefore the listeners that are generated
     // for the execution clients are useless. In order to not output garbage, we don't generate
     // these listeners.
-    propMap.put(ConfVars.METASTORE_PRE_EVENT_LISTENERS.varname, "")
-    propMap.put(ConfVars.METASTORE_EVENT_LISTENERS.varname, "")
-    propMap.put(ConfVars.METASTORE_END_FUNCTION_LISTENERS.varname, "")
+    propMap.put("hive.metastore.pre.event.listeners", "")
+    propMap.put("hive.metastore.event.listeners", "")
+    propMap.put("hive.metastore.end.function.listeners", "")
 
     // SPARK-21451: Spark will gather all `spark.hadoop.*` properties from a `SparkConf` to a
     // Hadoop Configuration internally, as long as it happens after SparkContext initialized.
