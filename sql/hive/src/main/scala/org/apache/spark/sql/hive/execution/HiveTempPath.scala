@@ -27,7 +27,6 @@ import scala.util.control.NonFatal
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
-import org.apache.hadoop.hive.common.FileUtils
 import org.apache.hadoop.hive.ql.exec.TaskRunner
 
 import org.apache.spark.SparkException
@@ -35,7 +34,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.internal.LogKeys.PATH
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.errors.QueryExecutionErrors
-import org.apache.spark.sql.hive.HiveExternalCatalog
+import org.apache.spark.sql.hive.{HiveExternalCatalog, HiveShimUtils}
 
 class HiveTempPath(session: SparkSession, val hadoopConf: Configuration, path: Path)
   extends Logging {
@@ -149,7 +148,7 @@ class HiveTempPath(session: SparkSession, val hadoopConf: Configuration, path: P
     try {
       stagingDirForCreating.foreach { stagingDir =>
         val fs: FileSystem = stagingDir.getFileSystem(hadoopConf)
-        if (!FileUtils.mkdir(fs, stagingDir, true, hadoopConf)) {
+        if (!HiveShimUtils.mkdir(fs, stagingDir, hadoopConf)) {
           throw SparkException.internalError(
             "Cannot create staging directory  '" + stagingDir.toString + "'")
         }

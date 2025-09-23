@@ -27,7 +27,6 @@ import org.apache.hadoop.hive.metastore.api.hive_metastoreConstants._
 import org.apache.hadoop.hive.ql.exec.Utilities
 import org.apache.hadoop.hive.ql.metadata.{Partition => HivePartition, Table => HiveTable}
 import org.apache.hadoop.hive.ql.plan.{PartitionDesc, TableDesc}
-import org.apache.hadoop.hive.serde2.Deserializer
 import org.apache.hadoop.hive.serde2.avro.AvroSerdeUtils.AvroTableProperties
 import org.apache.hadoop.hive.serde2.objectinspector.{ObjectInspectorConverters, StructObjectInspector}
 import org.apache.hadoop.hive.serde2.objectinspector.primitive._
@@ -43,7 +42,7 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.{InternalRow, SQLConfHelper}
 import org.apache.spark.sql.catalyst.analysis.CastSupport
 import org.apache.spark.sql.catalyst.expressions._
-import org.apache.spark.sql.catalyst.util.DateTimeUtils
+import org.apache.spark.sql.hive.HiveShimUtils.Deserializer
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.unsafe.types.UTF8String
 import org.apache.spark.util.{SerializableConfiguration, Utils}
@@ -135,7 +134,7 @@ class HadoopTableReader(
       val hconf = broadcastedHadoopConf.value.value
       val deserializer = deserializerClass.getConstructor().newInstance()
       DeserializerLock.synchronized {
-        deserializer.initialize(hconf, localTableDesc.getProperties)
+        HiveShimUtils.initializeDeserializer(deserializer, hconf, localTableDesc.getProperties)
       }
       HadoopTableReader.fillObject(iter, deserializer, attrsWithIndex, mutableRow, deserializer)
     }
@@ -226,12 +225,15 @@ class HadoopTableReader(
           case (key, value) => props.setProperty(key, value)
         }
         DeserializerLock.synchronized {
-          deserializer.initialize(hconf, props)
+          HiveShimUtils.initializeDeserializer(deserializer, hconf, props)
         }
         // get the table deserializer
-        val tableSerDe = localTableDesc.getDeserializerClass.getConstructor().newInstance()
+        val tableSerDe = HiveShimUtils
+          .getDeserializerClassFromTableDesc(localTableDesc)
+          .getConstructor()
+          .newInstance()
         DeserializerLock.synchronized {
-          tableSerDe.initialize(hconf, tableProperties)
+          HiveShimUtils.initializeDeserializer(tableSerDe, hconf, tableProperties)
         }
 
         // fill the non partition key attributes
@@ -488,10 +490,10 @@ private[hive] object HadoopTableReader extends HiveInspectors with Logging {
             row.update(ordinal, HiveShim.toCatalystDecimal(oi, value))
         case oi: TimestampObjectInspector =>
           (value: Any, row: InternalRow, ordinal: Int) =>
-            row.setLong(ordinal, DateTimeUtils.fromJavaTimestamp(oi.getPrimitiveJavaObject(value)))
+            row.setLong(ordinal, HiveShimUtils.fromTimestamp(oi.getPrimitiveJavaObject(value)))
         case oi: DateObjectInspector =>
           (value: Any, row: InternalRow, ordinal: Int) =>
-            row.setInt(ordinal, DateTimeUtils.fromJavaDate(oi.getPrimitiveJavaObject(value)))
+            row.setInt(ordinal, HiveShimUtils.fromDate(oi.getPrimitiveJavaObject(value)))
         case oi: BinaryObjectInspector =>
           (value: Any, row: InternalRow, ordinal: Int) =>
             row.update(ordinal, oi.getPrimitiveJavaObject(value))

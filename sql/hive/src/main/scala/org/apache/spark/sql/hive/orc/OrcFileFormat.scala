@@ -17,17 +17,15 @@
 
 package org.apache.spark.sql.hive.orc
 
-import java.util.{Base64, Properties}
+import java.util.Properties
 
 import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
-import com.esotericsoftware.kryo.Kryo
-import com.esotericsoftware.kryo.io.Output
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileStatus, Path}
 import org.apache.hadoop.hive.ql.io.orc._
-import org.apache.hadoop.hive.ql.io.sarg.SearchArgument
+import org.apache.hadoop.hive.ql.io.sarg.ConvertAstToSearchArg
 import org.apache.hadoop.hive.serde2.objectinspector
 import org.apache.hadoop.hive.serde2.objectinspector.{SettableStructObjectInspector, StructObjectInspector}
 import org.apache.hadoop.hive.serde2.typeinfo.{StructTypeInfo, TypeInfoUtils}
@@ -45,7 +43,7 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.execution.datasources._
 import org.apache.spark.sql.execution.datasources.orc.{OrcFilters, OrcOptions, OrcUtils}
-import org.apache.spark.sql.hive.{HiveInspectors, HiveShim}
+import org.apache.spark.sql.hive.{HiveInspectors, HiveShim, HiveShimUtils}
 import org.apache.spark.sql.internal.SessionStateHelper
 import org.apache.spark.sql.sources._
 import org.apache.spark.sql.types._
@@ -140,7 +138,7 @@ case class OrcFileFormat() extends FileFormat
     if (getSqlConf(sparkSession).orcFilterPushDown) {
       // Sets pushed predicates
       OrcFilters.createFilter(requiredSchema, filters).foreach { f =>
-        hadoopConf.set(OrcFileFormat.SARG_PUSHDOWN, toKryo(f))
+        hadoopConf.set(ConvertAstToSearchArg.SARG_PUSHDOWN, HiveShimUtils.sargToKryo(f))
         hadoopConf.setBoolean("hive.optimize.index.filter", true)
       }
     }
@@ -173,7 +171,12 @@ case class OrcFileFormat() extends FileFormat
           // ObjectInspector during recordReader creation itself and can
           // avoid NameNode call in unwrapOrcStructs per file.
           // Specifically would be helpful for partitioned datasets.
-          val orcReader = OrcFile.createReader(filePath, OrcFile.readerOptions(conf))
+          val options =
+            OrcFile.readerOptions(conf).useUTCTimestamp(false)
+          options.convertToProlepticGregorian(
+            conf.getBoolean(OrcConf.PROLEPTIC_GREGORIAN.getAttribute, false))
+          val orcReader =
+            OrcFile.createReader(filePath, options.asInstanceOf[OrcFile.ReaderOptions])
           new SparkOrcNewRecordReader(orcReader, conf, file.start, file.length)
         }
 
@@ -210,16 +213,6 @@ case class OrcFileFormat() extends FileFormat
 
     case _ => false
   }
-
-  // HIVE-11253 moved `toKryo` from `SearchArgument` to `storage-api` module.
-  // This is copied from Hive 1.2's SearchArgumentImpl.toKryo().
-  private def toKryo(sarg: SearchArgument): String = {
-    val kryo = new Kryo()
-    val out = new Output(4 * 1024, 10 * 1024 * 1024)
-    kryo.writeObject(out, sarg)
-    out.close()
-    Base64.getEncoder().encodeToString(out.toBytes)
-  }
 }
 
 private[orc] class OrcSerializer(dataSchema: StructType, conf: Configuration)
@@ -236,7 +229,7 @@ private[orc] class OrcSerializer(dataSchema: StructType, conf: Configuration)
     table.setProperty("columns.types", dataSchema.map(_.dataType.catalogString).mkString(":"))
 
     val serde = new OrcSerde
-    serde.initialize(conf, table)
+    HiveShimUtils.initializeSerializer(serde, conf, table)
     serde
   }
 
@@ -321,9 +314,6 @@ private[orc] class OrcOutputWriter(
 }
 
 private[orc] object OrcFileFormat extends HiveInspectors with Logging {
-  // This constant duplicates `OrcInputFormat.SARG_PUSHDOWN`, which is unfortunately not public.
-  private[orc] val SARG_PUSHDOWN = "sarg.pushdown"
-
   def unwrapOrcStructs(
       conf: Configuration,
       dataSchema: StructType,
