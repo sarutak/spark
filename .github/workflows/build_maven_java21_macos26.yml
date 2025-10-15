@@ -17,12 +17,12 @@
 # under the License.
 #
 
-name: "Build / Maven (master, Scala 2.13, Hadoop 3, JDK 21, MacOS-15)"
+name: "Build / Maven (master, Scala 2.13, Hadoop 3, JDK 21, MacOS-26)"
 
 on:
-  schedule:
-    - cron: '0 20 */2 * *'
-  workflow_dispatch:
+  push:
+    branches:
+    - '**'
 
 jobs:
   run-build:
@@ -33,7 +33,7 @@ jobs:
     if: github.repository == 'apache/spark'
     with:
       java: 21
-      os: macos-15
+      os: macos-26
       arch: arm64
       envs: >-
         {
