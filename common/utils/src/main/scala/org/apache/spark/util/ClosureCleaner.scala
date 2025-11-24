@@ -115,6 +115,8 @@ private[spark] object ClosureCleaner extends Logging {
         accessedFields(currentClass) = Set.empty[String]
         currentClass = currentClass.getSuperclass()
       }
+      currentClass = cls.getEnclosingClass
+      accessedFields(currentClass) = Set.empty[String]
     }
   }
 
@@ -143,6 +145,9 @@ private[spark] object ClosureCleaner extends Logging {
     var currentClass = outerClass
     assert(currentClass != null, "The outer class can't be null.")
 
+    if (parent != null) {
+      accessedFields(currentClass) -= "$outer"
+    }
     while (currentClass != null) {
       setAccessedFields(currentClass, clone, obj, accessedFields)
       currentClass = currentClass.getSuperclass()
@@ -420,8 +425,15 @@ private[spark] object ClosureCleaner extends Logging {
     if (accessedFields(capturingClass).size < capturingClass.getDeclaredFields.length) {
       // clone and clean the enclosing `this` only when there are fields to null out
       logDebug(s" + cloning instance of REPL class ${capturingClass.getName}")
+      val outerThis0Field = outerThis.getClass.getDeclaredField("$outer")
+      outerThis0Field.setAccessible(true)
+      val outerThis0 = outerThis0Field.get(outerThis)
+      val outerThis0Class = outerThis0.getClass
+      val clonedOuterThis0 = cloneAndSetFields(
+        parent = null, outerThis0, outerThis0Class, accessedFields)
+
       val clonedOuterThis = cloneAndSetFields(
-        parent = null, outerThis, capturingClass, accessedFields)
+        parent = clonedOuterThis0, outerThis, capturingClass, accessedFields)
 
       val outerField = func.getClass.getDeclaredField("arg$1")
       // SPARK-37072: When Java 17 is used and `outerField` is read-only,
@@ -909,6 +921,9 @@ private[spark] object IndylambdaScalaClosures extends Logging {
             logTrace(s"    found intra class call to $ownerExternalName.$name$desc")
             // could be invoking a helper method or a field accessor method, just follow it.
             pushIfNotVisited(MethodIdentifier(currentClass, name, desc))
+          } else if (owner + "$$iw" == currentClassInternalName) {
+            val classInfo = getOrUpdateClassInfo(owner)
+            pushIfNotVisited(MethodIdentifier(classInfo._1, name, desc))
           } else if (owner.startsWith("ammonite/$sess/cmd")) {
             // we're inside Ammonite command / command helper object, track all calls from here
             val classInfo = getOrUpdateClassInfo(owner)
