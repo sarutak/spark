@@ -101,6 +101,7 @@ abstract class SparkFunSuite
     try {
       // Avoid leaking map entries in tests that use accumulators without SparkContext
       AccumulatorContext.clear()
+      System.gc
     } finally {
       super.afterAll()
       if (enableAutoThreadAudit) {
