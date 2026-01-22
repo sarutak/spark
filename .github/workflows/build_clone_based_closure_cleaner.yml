@@ -39,6 +39,7 @@ jobs:
           "PYTHON_TO_TEST": "python3.11",
           "SKIP_MIMA": "true",
           "SKIP_UNIDOC": "true",
+          "SPARK_CLONE_BASED_CLOSURE_CLEANER": "true"
         }
       jobs: >-
         {
