@@ -1291,7 +1291,8 @@ object ExcludedDependencies {
       ExclusionRule("org.slf4j", "slf4j-simple"),
       ExclusionRule("javax.servlet", "javax.servlet-api"),
       ExclusionRule("io.netty", "netty-codec-protobuf"),
-      ExclusionRule("io.netty", "netty-codec-marshalling"))
+      ExclusionRule("io.netty", "netty-codec-marshalling"),
+      ExclusionRule("junit", "junit"))
   )
 }
 
