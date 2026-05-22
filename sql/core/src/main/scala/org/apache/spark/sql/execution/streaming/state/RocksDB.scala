@@ -94,6 +94,11 @@ class RocksDB(
   // getFromBatchAndDB. This reduces JNI calls and mutex acquisitions by batching
   // all put/merge/delete operations until commit().
   private var writeBatch: WriteBatchWithIndex = _
+
+  // Flag to indicate that we are replaying changelog records during load.
+  // During replay, writes go directly to the DB (not the batch) because they are
+  // restoring committed state, not new user writes.
+  private var isReplaying: Boolean = false
   private val flushOptions = new FlushOptions().setWaitForFlush(true)  // wait for flush to complete
 
   private val bloomFilter = new BloomFilter()
@@ -895,6 +900,8 @@ class RocksDB(
 
     logInfo(log"Loading ${MDC(LogKeys.VERSION_NUM, version)} with stateStoreCkptId: ${
       MDC(LogKeys.UUID, stateStoreCkptId.getOrElse(""))}")
+    // Initialize WriteBatchWithIndex before any operations (including changelog replay)
+    resetWriteBatch()
     // If loadEmpty is true, we will not generate a changelog but only a snapshot file to prevent
     // mistakenly applying new changelog to older state version
     enableChangelogCheckpointing = if (loadEmpty) false else conf.enableChangelogCheckpointing
@@ -912,9 +919,6 @@ class RocksDB(
     )
     // Register with memory manager after successful load
     updateMemoryUsageIfNeeded()
-
-    // Initialize WriteBatchWithIndex for buffering writes until commit
-    resetWriteBatch()
 
     this
   }
@@ -947,6 +951,8 @@ class RocksDB(
     logInfo(
       log"Loading snapshot at version ${MDC(LogKeys.VERSION_NUM, snapshotVersion)} and apply " +
       log"changelog files to version ${MDC(LogKeys.VERSION_NUM, endVersion)}.")
+    // Initialize WriteBatchWithIndex before any operations (including changelog replay)
+    resetWriteBatch()
     try {
       replayFromCheckpoint(
         snapshotVersion,
@@ -972,9 +978,6 @@ class RocksDB(
     loadMetrics ++= Map(
       "loadFromSnapshot" -> (System.currentTimeMillis() - startTime)
     )
-
-    // Initialize WriteBatchWithIndex for buffering writes until commit
-    resetWriteBatch()
 
     this
   }
@@ -1060,62 +1063,66 @@ class RocksDB(
    */
   private def replayChangelog(versionsAndUniqueIds: Array[(Long, Option[String])]): Unit = {
     val startTime = System.currentTimeMillis()
+    isReplaying = true
+    try {
+      assert(!versionsAndUniqueIds.isEmpty && versionsAndUniqueIds.head._1 == loadedVersion + 1,
+        s"Replay changelog should start from one version after loadedVersion: $loadedVersion," +
+          s" but it is not."
+      )
 
-    assert(!versionsAndUniqueIds.isEmpty && versionsAndUniqueIds.head._1 == loadedVersion + 1,
-      s"Replay changelog should start from one version after loadedVersion: $loadedVersion," +
-        s" but it is not."
-    )
+      logInfo(log"Replaying changelog from version " +
+        log"${MDC(LogKeys.LOADED_VERSION, loadedVersion)} -> " +
+        log"${MDC(LogKeys.END_VERSION, versionsAndUniqueIds.lastOption.map(_._1))}")
 
-    logInfo(log"Replaying changelog from version " +
-      log"${MDC(LogKeys.LOADED_VERSION, loadedVersion)} -> " +
-      log"${MDC(LogKeys.END_VERSION, versionsAndUniqueIds.lastOption.map(_._1))}")
+      versionsAndUniqueIds.foreach { case (v, uniqueId) =>
+        logInfo(log"replaying changelog from version ${MDC(LogKeys.VERSION_NUM, v)} with " +
+          log"unique Id: ${MDC(LogKeys.UUID, uniqueId)}")
 
-    versionsAndUniqueIds.foreach { case (v, uniqueId) =>
-      logInfo(log"replaying changelog from version ${MDC(LogKeys.VERSION_NUM, v)} with " +
-        log"unique Id: ${MDC(LogKeys.UUID, uniqueId)}")
+        var changelogReader: StateStoreChangelogReader = null
+        try {
+          changelogReader = fileManager.getChangelogReader(v, uniqueId)
 
-      var changelogReader: StateStoreChangelogReader = null
-      try {
-        changelogReader = fileManager.getChangelogReader(v, uniqueId)
+          // If row checksum is enabled, verify every record in the changelog file
+          val kvVerifier = KeyValueIntegrityVerifier
+            .create(loggingId, conf.rowChecksumEnabled, verificationRatio = 1)
 
-        // If row checksum is enabled, verify every record in the changelog file
-        val kvVerifier = KeyValueIntegrityVerifier
-          .create(loggingId, conf.rowChecksumEnabled, verificationRatio = 1)
+          changelogReader.foreach { case (recordType, key, value) =>
+            recordType match {
+              case RecordType.PUT_RECORD =>
+                verifyChangelogRecord(kvVerifier, key, Some(value))
+                put(key, value, includesPrefix = useColumnFamilies,
+                  deriveCfName = useColumnFamilies, includesChecksum = conf.rowChecksumEnabled)
 
-        changelogReader.foreach { case (recordType, key, value) =>
-          recordType match {
-            case RecordType.PUT_RECORD =>
-              verifyChangelogRecord(kvVerifier, key, Some(value))
-              put(key, value, includesPrefix = useColumnFamilies,
-                deriveCfName = useColumnFamilies, includesChecksum = conf.rowChecksumEnabled)
+              case RecordType.DELETE_RECORD =>
+                verifyChangelogRecord(kvVerifier, key, None)
+                remove(key, includesPrefix = useColumnFamilies,
+                  deriveCfName = useColumnFamilies, includesChecksum = conf.rowChecksumEnabled)
 
-            case RecordType.DELETE_RECORD =>
-              verifyChangelogRecord(kvVerifier, key, None)
-              remove(key, includesPrefix = useColumnFamilies,
-                deriveCfName = useColumnFamilies, includesChecksum = conf.rowChecksumEnabled)
+              case RecordType.MERGE_RECORD =>
+                verifyChangelogRecord(kvVerifier, key, Some(value))
+                merge(key, value, includesPrefix = useColumnFamilies,
+                  deriveCfName = useColumnFamilies, includesChecksum = conf.rowChecksumEnabled)
 
-            case RecordType.MERGE_RECORD =>
-              verifyChangelogRecord(kvVerifier, key, Some(value))
-              merge(key, value, includesPrefix = useColumnFamilies,
-                deriveCfName = useColumnFamilies, includesChecksum = conf.rowChecksumEnabled)
-
-            case RecordType.DELETE_RANGE_RECORD =>
-              // For deleteRange, 'key' is beginKey and 'value' is endKey
-              verifyChangelogRecord(kvVerifier, key, Some(value))
-              deleteRange(key, value, includesPrefix = useColumnFamilies,
-                includesChecksum = conf.rowChecksumEnabled)
+              case RecordType.DELETE_RANGE_RECORD =>
+                // For deleteRange, 'key' is beginKey and 'value' is endKey
+                verifyChangelogRecord(kvVerifier, key, Some(value))
+                deleteRange(key, value, includesPrefix = useColumnFamilies,
+                  includesChecksum = conf.rowChecksumEnabled)
+            }
           }
+        } finally {
+          if (changelogReader != null) changelogReader.closeIfNeeded()
         }
-      } finally {
-        if (changelogReader != null) changelogReader.closeIfNeeded()
       }
-    }
 
-    val duration = System.currentTimeMillis() - startTime
-    loadMetrics ++= Map(
-      "replayChangelog" -> Math.max(duration, 1L), // avoid flaky tests
-      "numReplayChangeLogFiles" -> versionsAndUniqueIds.length
-    )
+      val duration = System.currentTimeMillis() - startTime
+      loadMetrics ++= Map(
+        "replayChangelog" -> Math.max(duration, 1L), // avoid flaky tests
+        "numReplayChangeLogFiles" -> versionsAndUniqueIds.length
+      )
+    } finally {
+      isReplaying = false
+    }
   }
 
   private def verifyChangelogRecord(
@@ -1353,7 +1360,11 @@ class RocksDB(
     }
 
     handleMetricsUpdate(keyWithPrefix, columnFamilyName, isPutOrMerge = true)
-    writeBatch.put(keyWithPrefix, valueWithChecksum)
+    if (isReplaying) {
+      db.put(writeOptions, keyWithPrefix, valueWithChecksum)
+    } else {
+      writeBatch.put(keyWithPrefix, valueWithChecksum)
+    }
     changelogWriter.foreach(_.put(keyWithPrefix, valueWithChecksum))
   }
 
@@ -1429,7 +1440,11 @@ class RocksDB(
     }
 
     handleMetricsUpdate(keyWithPrefix, columnFamilyName, isPutOrMerge = true)
-    writeBatch.put(keyWithPrefix, valuesInArrayByte)
+    if (isReplaying) {
+      db.put(writeOptions, keyWithPrefix, valuesInArrayByte)
+    } else {
+      writeBatch.put(keyWithPrefix, valuesInArrayByte)
+    }
     changelogWriter.foreach(_.put(keyWithPrefix, valuesInArrayByte))
   }
 
@@ -1474,7 +1489,11 @@ class RocksDB(
     }
 
     handleMetricsUpdate(keyWithPrefix, columnFamilyName, isPutOrMerge = true)
-    writeBatch.merge(keyWithPrefix, valueWithChecksum)
+    if (isReplaying) {
+      db.merge(writeOptions, keyWithPrefix, valueWithChecksum)
+    } else {
+      writeBatch.merge(keyWithPrefix, valueWithChecksum)
+    }
     changelogWriter.foreach(_.merge(keyWithPrefix, valueWithChecksum))
   }
 
@@ -1508,7 +1527,11 @@ class RocksDB(
     val valueInArrayByte = getListValuesInArrayByte(keyWithPrefix, values, includesChecksum)
 
     handleMetricsUpdate(keyWithPrefix, columnFamilyName, isPutOrMerge = true)
-    writeBatch.merge(keyWithPrefix, valueInArrayByte)
+    if (isReplaying) {
+      db.merge(writeOptions, keyWithPrefix, valueInArrayByte)
+    } else {
+      writeBatch.merge(keyWithPrefix, valueInArrayByte)
+    }
     changelogWriter.foreach(_.merge(keyWithPrefix, valueInArrayByte))
   }
 
@@ -1545,7 +1568,11 @@ class RocksDB(
     }
 
     handleMetricsUpdate(keyWithPrefix, columnFamilyName, isPutOrMerge = false)
-    writeBatch.delete(keyWithPrefix)
+    if (isReplaying) {
+      db.delete(writeOptions, keyWithPrefix)
+    } else {
+      writeBatch.delete(keyWithPrefix)
+    }
     changelogWriter match {
       case Some(writer) =>
         val keyWithChecksum = if (conf.rowChecksumEnabled) {
@@ -1597,7 +1624,11 @@ class RocksDB(
       originalEndKey
     }
 
-    writeBatch.deleteRange(beginKeyWithPrefix, endKeyWithPrefix)
+    if (isReplaying) {
+      db.deleteRange(writeOptions, beginKeyWithPrefix, endKeyWithPrefix)
+    } else {
+      writeBatch.deleteRange(beginKeyWithPrefix, endKeyWithPrefix)
+    }
     changelogWriter.foreach { writer =>
       val endKeyForChangelog = if (conf.rowChecksumEnabled) {
         KeyValueChecksumEncoder.encodeValueRowWithChecksum(endKeyWithPrefix,
