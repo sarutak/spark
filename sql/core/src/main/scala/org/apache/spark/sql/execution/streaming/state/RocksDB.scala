@@ -25,7 +25,7 @@ import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue}
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicLong}
 
 import scala.collection.{mutable, Map}
-import scala.jdk.CollectionConverters.{ConcurrentMapHasAsScala, ListHasAsScala}
+import scala.jdk.CollectionConverters.ConcurrentMapHasAsScala
 import scala.util.Try
 import scala.util.control.NonFatal
 
@@ -89,6 +89,11 @@ class RocksDB(
   private val readOptions = new ReadOptions()  // used for gets
   // disable WAL since we flush explicitly on commit
   private val writeOptions = new WriteOptions().setDisableWAL(true)
+
+  // WriteBatchWithIndex buffers all writes and supports read-your-own-writes via
+  // getFromBatchAndDB. This reduces JNI calls and mutex acquisitions by batching
+  // all put/merge/delete operations until commit().
+  private var writeBatch: WriteBatchWithIndex = _
   private val flushOptions = new FlushOptions().setWaitForFlush(true)  // wait for flush to complete
 
   private val bloomFilter = new BloomFilter()
@@ -908,6 +913,9 @@ class RocksDB(
     // Register with memory manager after successful load
     updateMemoryUsageIfNeeded()
 
+    // Initialize WriteBatchWithIndex for buffering writes until commit
+    resetWriteBatch()
+
     this
   }
 
@@ -964,6 +972,9 @@ class RocksDB(
     loadMetrics ++= Map(
       "loadFromSnapshot" -> (System.currentTimeMillis() - startTime)
     )
+
+    // Initialize WriteBatchWithIndex for buffering writes until commit
+    resetWriteBatch()
 
     this
   }
@@ -1191,21 +1202,19 @@ class RocksDB(
       keys
     }
 
-    val keysList = java.util.Arrays.asList(finalKeys: _*)
-
-    // Call RocksDB multiGetAsList
-    val valuesList = db.multiGetAsList(readOptions, keysList)
+    // Use getFromBatchAndDB for each key to see uncommitted writes in the batch
+    val values = finalKeys.map(k => writeBatch.getFromBatchAndDB(db, readOptions, k))
 
     // Decode and verify checksums if enabled, then return iterator
     if (conf.rowChecksumEnabled) {
-      valuesList.asScala.iterator.zipWithIndex.map {
+      values.iterator.zipWithIndex.map {
         case (value, idx) if value != null =>
           KeyValueChecksumEncoder.decodeAndVerifyValueRowWithChecksum(
             readVerifier, finalKeys(idx), value, delimiterSize)
         case _ => null
       }
     } else {
-      valuesList.asScala.iterator
+      values.iterator
     }
   }
 
@@ -1226,7 +1235,7 @@ class RocksDB(
     } else {
       key
     }
-    db.keyExists(keyWithPrefix)
+    writeBatch.getFromBatchAndDB(db, readOptions, keyWithPrefix) != null
   }
 
   /**
@@ -1254,7 +1263,7 @@ class RocksDB(
       key
     }
 
-    (keyWithPrefix, db.get(readOptions, keyWithPrefix))
+    (keyWithPrefix, writeBatch.getFromBatchAndDB(db, readOptions, keyWithPrefix))
   }
 
   /**
@@ -1286,7 +1295,7 @@ class RocksDB(
     val updateCount = if (isPutOrMerge) 1L else -1L
     if (useColumnFamilies) {
       if (conf.trackTotalNumberOfRows) {
-        val oldValue = db.get(readOptions, keyWithPrefix)
+        val oldValue = writeBatch.getFromBatchAndDB(db, readOptions, keyWithPrefix)
         if (checkExistingEntry(oldValue, isPutOrMerge)) {
           val cfInfo = getColumnFamilyInfo(cfName)
           if (cfInfo.isInternal) {
@@ -1298,7 +1307,7 @@ class RocksDB(
       }
     } else {
       if (conf.trackTotalNumberOfRows) {
-        val oldValue = db.get(readOptions, keyWithPrefix)
+        val oldValue = writeBatch.getFromBatchAndDB(db, readOptions, keyWithPrefix)
         if (checkExistingEntry(oldValue, isPutOrMerge)) {
           numKeysOnWritingVersion += updateCount
         }
@@ -1339,7 +1348,7 @@ class RocksDB(
     }
 
     handleMetricsUpdate(keyWithPrefix, columnFamilyName, isPutOrMerge = true)
-    db.put(writeOptions, keyWithPrefix, valueWithChecksum)
+    writeBatch.put(keyWithPrefix, valueWithChecksum)
     changelogWriter.foreach(_.put(keyWithPrefix, valueWithChecksum))
   }
 
@@ -1415,7 +1424,7 @@ class RocksDB(
     }
 
     handleMetricsUpdate(keyWithPrefix, columnFamilyName, isPutOrMerge = true)
-    db.put(writeOptions, keyWithPrefix, valuesInArrayByte)
+    writeBatch.put(keyWithPrefix, valuesInArrayByte)
     changelogWriter.foreach(_.put(keyWithPrefix, valuesInArrayByte))
   }
 
@@ -1460,7 +1469,7 @@ class RocksDB(
     }
 
     handleMetricsUpdate(keyWithPrefix, columnFamilyName, isPutOrMerge = true)
-    db.merge(writeOptions, keyWithPrefix, valueWithChecksum)
+    writeBatch.merge(keyWithPrefix, valueWithChecksum)
     changelogWriter.foreach(_.merge(keyWithPrefix, valueWithChecksum))
   }
 
@@ -1494,7 +1503,7 @@ class RocksDB(
     val valueInArrayByte = getListValuesInArrayByte(keyWithPrefix, values, includesChecksum)
 
     handleMetricsUpdate(keyWithPrefix, columnFamilyName, isPutOrMerge = true)
-    db.merge(writeOptions, keyWithPrefix, valueInArrayByte)
+    writeBatch.merge(keyWithPrefix, valueInArrayByte)
     changelogWriter.foreach(_.merge(keyWithPrefix, valueInArrayByte))
   }
 
@@ -1531,7 +1540,7 @@ class RocksDB(
     }
 
     handleMetricsUpdate(keyWithPrefix, columnFamilyName, isPutOrMerge = false)
-    db.delete(writeOptions, keyWithPrefix)
+    writeBatch.delete(keyWithPrefix)
     changelogWriter match {
       case Some(writer) =>
         val keyWithChecksum = if (conf.rowChecksumEnabled) {
@@ -1583,7 +1592,7 @@ class RocksDB(
       originalEndKey
     }
 
-    db.deleteRange(writeOptions, beginKeyWithPrefix, endKeyWithPrefix)
+    writeBatch.deleteRange(beginKeyWithPrefix, endKeyWithPrefix)
     changelogWriter.foreach { writer =>
       val endKeyForChangelog = if (conf.rowChecksumEnabled) {
         KeyValueChecksumEncoder.encodeValueRowWithChecksum(endKeyWithPrefix,
@@ -1601,7 +1610,8 @@ class RocksDB(
    */
   def iterator(): NextIterator[ByteArrayPair] = {
     updateMemoryUsageIfNeeded()
-    val iter = db.newIterator()
+    val baseIter = db.newIterator()
+    val iter = writeBatch.newIteratorWithBase(baseIter)
     logInfo(log"Getting iterator from version ${MDC(LogKeys.LOADED_VERSION, loadedVersion)}")
     iter.seekToFirst()
 
@@ -1653,7 +1663,7 @@ class RocksDB(
   }
 
   private def countKeys(): (Long, Long) = {
-    val iter = db.newIterator()
+    val iter = writeBatch.newIteratorWithBase(db.newIterator())
 
     try {
       logInfo(log"Counting keys - getting iterator from version " +
@@ -1705,7 +1715,7 @@ class RocksDB(
     val prefixScanReadOptions = new ReadOptions()
     upperBoundSlice.foreach(prefixScanReadOptions.setIterateUpperBound)
 
-    val iter = db.newIterator(prefixScanReadOptions)
+    val iter = writeBatch.newIteratorWithBase(db.newIterator(prefixScanReadOptions))
     iter.seek(updatedPrefix)
 
     def closeResources(): Unit = {
@@ -1789,7 +1799,7 @@ class RocksDB(
     val scanReadOptions = new ReadOptions()
     upperBoundSlice.foreach(scanReadOptions.setIterateUpperBound)
 
-    val iter = db.newIterator(scanReadOptions)
+    val iter = writeBatch.newIteratorWithBase(db.newIterator(scanReadOptions))
     if (seekTarget != null) {
       iter.seek(seekTarget)
     } else {
@@ -1850,6 +1860,9 @@ class RocksDB(
     val newVersion = loadedVersion + 1
     try {
       logInfo(log"Flushing updates for ${MDC(LogKeys.VERSION_NUM, newVersion)}")
+
+      // Write all buffered operations to the DB atomically
+      db.write(writeOptions, writeBatch)
 
       if (forceSnapshot) {
         shouldForceSnapshot.set(true)
@@ -1937,6 +1950,8 @@ class RocksDB(
       recordedMetrics = Some(metrics)
       logInfo(log"Committed ${MDC(LogKeys.VERSION_NUM, newVersion)}, " +
         log"stats = ${MDC(LogKeys.METRICS_JSON, recordedMetrics.get.json)}")
+      // Reset the write batch for the next version
+      resetWriteBatch()
       (loadedVersion, getLatestCheckpointInfo)
     } catch {
       case t: Throwable =>
@@ -2037,12 +2052,23 @@ class RocksDB(
       sessionStateStoreCkptId = None
       lineageManager.clear()
       changelogWriter.foreach(_.abort())
+      // Discard all buffered writes
+      resetWriteBatch()
     } finally {
       // Make sure changelogWriter gets recreated next time even if the changelogWriter aborts with
       // an exception.
       changelogWriter = None
     }
     logInfo(log"Rolled back to ${MDC(LogKeys.VERSION_NUM, loadedVersion)}")
+  }
+
+  /** Close the current WriteBatchWithIndex (if any) and create a fresh one. */
+  private def resetWriteBatch(): Unit = {
+    if (writeBatch != null) {
+      writeBatch.close()
+    }
+    // overwrite_key = true so that repeated puts to the same key are collapsed
+    writeBatch = new WriteBatchWithIndex(true)
   }
 
   def doMaintenance(): Unit = {
@@ -2127,6 +2153,10 @@ class RocksDB(
     try {
       closeDB()
 
+      if (writeBatch != null) {
+        writeBatch.close()
+        writeBatch = null
+      }
       readOptions.close()
       writeOptions.close()
       flushOptions.close()
