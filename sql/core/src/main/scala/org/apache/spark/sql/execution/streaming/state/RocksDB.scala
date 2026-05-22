@@ -1295,7 +1295,12 @@ class RocksDB(
     val updateCount = if (isPutOrMerge) 1L else -1L
     if (useColumnFamilies) {
       if (conf.trackTotalNumberOfRows) {
-        val oldValue = writeBatch.getFromBatchAndDB(db, readOptions, keyWithPrefix)
+        // Use db.get() directly instead of writeBatch.getFromBatchAndDB() here because
+        // we only need to check whether the key already exists in the committed DB state.
+        // Using getFromBatchAndDB() would unnecessarily resolve pending merge operations
+        // in the write batch, causing significant performance degradation for merge-heavy
+        // workloads.
+        val oldValue = db.get(readOptions, keyWithPrefix)
         if (checkExistingEntry(oldValue, isPutOrMerge)) {
           val cfInfo = getColumnFamilyInfo(cfName)
           if (cfInfo.isInternal) {
@@ -1307,7 +1312,7 @@ class RocksDB(
       }
     } else {
       if (conf.trackTotalNumberOfRows) {
-        val oldValue = writeBatch.getFromBatchAndDB(db, readOptions, keyWithPrefix)
+        val oldValue = db.get(readOptions, keyWithPrefix)
         if (checkExistingEntry(oldValue, isPutOrMerge)) {
           numKeysOnWritingVersion += updateCount
         }
