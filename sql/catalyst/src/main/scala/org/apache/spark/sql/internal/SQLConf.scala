@@ -870,6 +870,16 @@ object SQLConf {
     .booleanConf
     .createWithDefault(true)
 
+  val WINDOW_REWRITE_AS_OF_JOIN_ENABLED =
+    buildConf("spark.sql.join.windowRewriteAsOfJoin.enabled")
+      .doc("When true, rewrite AS-OF joins (Backward, allowExactMatches=true, no tolerance, " +
+        "no residual) to a Window-over-union plan instead of the correlated subquery rewrite. " +
+        "The window plan uses LAST(right_struct) IGNORE NULLS over a UNION ALL of both sides, " +
+        "which benefits from WindowExec's codegen, spill, and AQE support.")
+      .version("4.1.0")
+      .booleanConf
+      .createWithDefault(false)
+
   val REQUIRE_ALL_CLUSTER_KEYS_FOR_CO_PARTITION =
     buildConf("spark.sql.requireAllClusterKeysForCoPartition")
       .internal()
@@ -7959,6 +7969,8 @@ class SQLConf extends Serializable with Logging with SqlApiConf {
     getConf(ADVANCED_PARTITION_PREDICATE_PUSHDOWN)
 
   def preferSortMergeJoin: Boolean = getConf(PREFER_SORTMERGEJOIN)
+
+  def windowRewriteAsOfJoinEnabled: Boolean = getConf(WINDOW_REWRITE_AS_OF_JOIN_ENABLED)
 
   def enableRadixSort: Boolean = getConf(RADIX_SORT_ENABLED)
 

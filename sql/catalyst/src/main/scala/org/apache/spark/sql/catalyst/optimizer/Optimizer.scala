@@ -338,6 +338,7 @@ abstract class Optimizer(catalogManager: CatalogManager)
       ComputeCurrentTime,
       ReplaceCurrentLike(catalogManager),
       SpecialDatetimeValues,
+      RewriteAsOfJoinToWindow,
       RewriteAsOfJoin,
       RewriteNearestByJoin,
       EvalInlineTables,
