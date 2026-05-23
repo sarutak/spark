@@ -2903,16 +2903,16 @@ class RocksDBSuite extends AlsoTestWithRocksDBFeatures with SharedSparkSession
       val remoteDir = dir.getCanonicalPath
       withDB(remoteDir, useColumnFamilies = colFamiliesEnabled) { db =>
         db.load(0)
-        db.put("a", "1") // put also triggers a db get
-        db.get("a") // this is found in-memory writebatch - no get triggered in db
-        db.get("b") // key doesn't exists - triggers db get
+        db.put("a", "1") // put also triggers a db get via handleMetricsUpdate
+        db.get("a") // found in WriteBatchWithIndex - no native db get
+        db.get("b") // key doesn't exist in batch or db - triggers db get
         db.commit()
-        verifyMetrics(putCount = 1, getCount = 3, metrics = db.metricsOpt.get)
+        verifyMetrics(putCount = 1, getCount = 2, metrics = db.metricsOpt.get)
 
         db.load(1)
-        db.put("b", "2") // put also triggers a db get
-        db.get("a") // not found in-memory writebatch, so triggers a db get
-        db.get("c") // key doesn't exists - triggers db get
+        db.put("b", "2") // put also triggers a db get via handleMetricsUpdate
+        db.get("a") // not in current batch, triggers db get
+        db.get("c") // key doesn't exist - triggers db get
         assert(iterator(db).toSet === Set(("a", "1"), ("b", "2")))
         db.commit()
         verifyMetrics(putCount = 1, getCount = 3, iterCountPositive = true, db.metricsOpt.get)
