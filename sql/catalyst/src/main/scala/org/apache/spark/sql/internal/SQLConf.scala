@@ -720,6 +720,17 @@ object SQLConf {
       .booleanConf
       .createWithDefault(true)
 
+  val RUNTIME_MIN_MAX_FILTER_ENABLED =
+    buildConf("spark.sql.optimizer.runtime.minMaxFilter.enabled")
+      .doc("When true and if one side of a shuffle join has a selective predicate, we attempt " +
+        "to insert a min/max filter on the join key in the other side to reduce the amount of " +
+        "shuffle data. This is lighter weight than a bloom filter and can enable scan-level " +
+        "row group skipping in columnar formats like Parquet.")
+      .version("4.3.0")
+      .withBindingPolicy(ConfigBindingPolicy.SESSION)
+      .booleanConf
+      .createWithDefault(false)
+
   val RUNTIME_BLOOM_FILTER_CREATION_SIDE_THRESHOLD =
     buildConf("spark.sql.optimizer.runtime.bloomFilter.creationSideThreshold")
       .doc("Size threshold of the bloom filter creation side plan. Estimated size needs to be " +
@@ -7589,6 +7600,9 @@ class SQLConf extends Serializable with Logging with SqlApiConf {
 
   def runtimeFilterBloomFilterEnabled: Boolean =
     getConf(RUNTIME_BLOOM_FILTER_ENABLED)
+
+  def runtimeFilterMinMaxEnabled: Boolean =
+    getConf(RUNTIME_MIN_MAX_FILTER_ENABLED)
 
   def runtimeFilterCreationSideThreshold: Long =
     getConf(RUNTIME_BLOOM_FILTER_CREATION_SIDE_THRESHOLD)

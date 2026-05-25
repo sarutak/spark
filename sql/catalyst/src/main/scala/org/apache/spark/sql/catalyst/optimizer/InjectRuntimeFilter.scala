@@ -20,7 +20,7 @@ package org.apache.spark.sql.catalyst.optimizer
 import scala.annotation.tailrec
 
 import org.apache.spark.sql.catalyst.expressions._
-import org.apache.spark.sql.catalyst.expressions.aggregate.BloomFilterAggregate
+import org.apache.spark.sql.catalyst.expressions.aggregate.{BloomFilterAggregate, Max, Min}
 import org.apache.spark.sql.catalyst.planning.ExtractEquiJoinKeys
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -41,12 +41,53 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
       filterApplicationSidePlan: LogicalPlan,
       filterCreationSideKey: Expression,
       filterCreationSidePlan: LogicalPlan): LogicalPlan = {
-    injectBloomFilter(
-      filterApplicationSideKey,
-      filterApplicationSidePlan,
-      filterCreationSideKey,
-      filterCreationSidePlan
-    )
+    var newPlan = filterApplicationSidePlan
+    if (conf.runtimeFilterMinMaxEnabled) {
+      newPlan = injectMinMaxFilter(
+        filterApplicationSideKey,
+        newPlan,
+        filterCreationSideKey,
+        filterCreationSidePlan
+      )
+    }
+    if (conf.runtimeFilterBloomFilterEnabled) {
+      newPlan = injectBloomFilter(
+        filterApplicationSideKey,
+        newPlan,
+        filterCreationSideKey,
+        filterCreationSidePlan
+      )
+    }
+    newPlan
+  }
+
+  private def injectMinMaxFilter(
+      filterApplicationSideKey: Expression,
+      filterApplicationSidePlan: LogicalPlan,
+      filterCreationSideKey: Expression,
+      filterCreationSidePlan: LogicalPlan): LogicalPlan = {
+    // Skip if the filter creation side is too big
+    if (filterCreationSidePlan.stats.sizeInBytes > conf.runtimeFilterCreationSideThreshold) {
+      return filterApplicationSidePlan
+    }
+    // Min/max filters only work on orderable types
+    if (!RowOrdering.isOrderable(filterApplicationSideKey.dataType)) {
+      return filterApplicationSidePlan
+    }
+
+    val minAlias = Alias(Min(filterCreationSideKey).toAggregateExpression(), "min_val")()
+    val maxAlias = Alias(Max(filterCreationSideKey).toAggregateExpression(), "max_val")()
+    val aggregate = ConstantFolding(ColumnPruning(
+      Aggregate(Nil, Seq(minAlias, maxAlias), filterCreationSidePlan)))
+
+    val minSubquery = ScalarSubquery(
+      ColumnPruning(Project(Seq(aggregate.output.head), aggregate)), Nil)
+    val maxSubquery = ScalarSubquery(
+      ColumnPruning(Project(Seq(aggregate.output.last), aggregate)), Nil)
+
+    val minFilter = GreaterThanOrEqual(filterApplicationSideKey, minSubquery)
+    val maxFilter = LessThanOrEqual(filterApplicationSideKey, maxSubquery)
+    Filter(And(minFilter, maxFilter), filterApplicationSidePlan)
   }
 
   private def injectBloomFilter(
@@ -332,7 +373,7 @@ object InjectRuntimeFilter extends Rule[LogicalPlan] with PredicateHelper with J
 
   override def apply(plan: LogicalPlan): LogicalPlan = plan match {
     case s: Subquery if s.correlated => plan
-    case _ if !conf.runtimeFilterBloomFilterEnabled => plan
+    case _ if !conf.runtimeFilterBloomFilterEnabled && !conf.runtimeFilterMinMaxEnabled => plan
     case _ => tryInjectRuntimeFilter(plan)
   }
 
