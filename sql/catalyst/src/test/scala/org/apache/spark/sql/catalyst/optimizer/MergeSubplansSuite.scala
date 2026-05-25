@@ -1966,4 +1966,65 @@ class MergeSubplansSuite extends PlanTest {
       comparePlans(Optimize.execute(originalQuery.analyze), originalQuery.analyze)
     }
   }
+
+  test("Merge grouping aggregates with same GROUP BY and child") {
+    // Two grouping aggregates over the same table with the same GROUP BY key
+    val agg1 = testRelation.groupBy($"b")(min($"a").as("min_a"), $"b")
+    val agg2 = testRelation.groupBy($"b")(max($"a").as("max_a"), $"b")
+    val originalQuery = agg1.join(agg2)
+
+    val optimized = Optimize.execute(originalQuery.analyze)
+
+    // Verify that a WithCTE is produced (plans were merged)
+    assert(optimized.isInstanceOf[WithCTE], "Expected grouping aggregates to be merged into a CTE")
+    val withCTE = optimized.asInstanceOf[WithCTE]
+    assert(withCTE.cteDefs.size == 1, "Expected exactly one CTE definition")
+
+    // The CTE should contain a merged aggregate with all aggregate expressions
+    val ctePlan = withCTE.cteDefs.head.child
+    ctePlan match {
+      case a: Aggregate =>
+        // Should have grouping key + both aggregate expressions
+        assert(a.aggregateExpressions.size >= 3,
+          s"Expected at least 3 expressions (b, min_a, max_a), got ${a.aggregateExpressions.size}")
+      case _ => fail(s"Expected Aggregate in CTE, got ${ctePlan.getClass.getSimpleName}")
+    }
+  }
+
+  test("Do not merge grouping aggregates with different GROUP BY keys") {
+    val agg1 = testRelation.groupBy($"b")(min($"a").as("min_a"), $"b")
+    val agg2 = testRelation.groupBy($"a")(max($"b").as("max_b"), $"a")
+    val originalQuery = agg1.join(agg2)
+
+    val optimized = Optimize.execute(originalQuery.analyze)
+    // Should NOT be merged since GROUP BY keys differ
+    assert(!optimized.isInstanceOf[WithCTE],
+      "Should not merge grouping aggregates with different GROUP BY keys")
+  }
+
+  test("Do not merge grouping aggregates with different child plans") {
+    val agg1 = testRelation.where($"a" > 1).groupBy($"b")(min($"a").as("min_a"), $"b")
+    val agg2 = testRelation.where($"a" < 10).groupBy($"b")(max($"a").as("max_a"), $"b")
+    val originalQuery = agg1.join(agg2)
+
+    val optimized = Optimize.execute(originalQuery.analyze)
+    // Should NOT be merged since child plans differ (different filters)
+    assert(!optimized.isInstanceOf[WithCTE],
+      "Should not merge grouping aggregates with different child plans")
+  }
+
+  test("Merge grouping aggregates preserves correct output") {
+    val agg1 = testRelation.groupBy($"b")(sum($"a").as("sum_a"), $"b")
+    val agg2 = testRelation.groupBy($"b")(avg($"a").as("avg_a"), $"b")
+    val originalQuery = agg1.join(agg2)
+
+    val optimized = Optimize.execute(originalQuery.analyze)
+    assert(optimized.isInstanceOf[WithCTE])
+
+    // Verify the output schema matches the original
+    val originalOutput = originalQuery.analyze.output.map(_.name)
+    val optimizedOutput = optimized.output.map(_.name)
+    assert(originalOutput == optimizedOutput,
+      s"Output mismatch: expected $originalOutput, got $optimizedOutput")
+  }
 }

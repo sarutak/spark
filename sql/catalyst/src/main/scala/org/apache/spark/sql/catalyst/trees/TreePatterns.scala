@@ -155,6 +155,7 @@ object TreePattern extends Enumeration  {
   val METRIC_VIEW_PLACEHOLDER: Value = Value
   val NATURAL_LIKE_JOIN: Value = Value
   val NEAREST_BY_JOIN: Value = Value
+  val GROUPING_AGGREGATE_REFERENCE: Value = Value
   val NO_GROUPING_AGGREGATE_REFERENCE: Value = Value
   val OFFSET: Value = Value
   val OUTER_JOIN: Value = Value

@@ -22,7 +22,7 @@ import scala.collection.mutable.ArrayBuffer
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, CTERelationDef, CTERelationRef, LeafNode, LogicalPlan, OneRowRelation, Project, Subquery, WithCTE}
 import org.apache.spark.sql.catalyst.rules.Rule
-import org.apache.spark.sql.catalyst.trees.TreePattern.{AGGREGATE, CTE, NO_GROUPING_AGGREGATE_REFERENCE, SCALAR_SUBQUERY, SCALAR_SUBQUERY_REFERENCE, TreePattern}
+import org.apache.spark.sql.catalyst.trees.TreePattern.{AGGREGATE, CTE, GROUPING_AGGREGATE_REFERENCE, NO_GROUPING_AGGREGATE_REFERENCE, SCALAR_SUBQUERY, SCALAR_SUBQUERY_REFERENCE, TreePattern}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.DataType
 
@@ -170,15 +170,18 @@ object MergeSubplans extends Rule[LogicalPlan] {
   private def extractCommonScalarSubqueries(plan: LogicalPlan) = {
     // Collect subplans by level into `PlanMerger`s and insert references in place of them.
     val planMergers = ArrayBuffer.empty[PlanMerger]
-    val planWithReferences = insertReferences(plan, true, planMergers)._1
+    // Track which (level, mergedPlanIndex) pairs are grouping aggregate merges (multi-row).
+    val groupingAggregateMerges = scala.collection.mutable.HashSet.empty[(Int, Int)]
+    val planWithReferences = insertReferences(plan, true, planMergers, groupingAggregateMerges)._1
 
     // Traverse level by level and convert merged plans to `CTERelationDef`s and keep non-merged
     // ones. While traversing replace references in plans back to `CTERelationRef`s or to original
     // plans. This is safe as a subplan at a level can reference only lower level subplans.
     val subplansByLevel = ArrayBuffer.empty[IndexedSeq[LogicalPlan]]
+    var currentLevel = 0
     planMergers.foreach { planMerger =>
       val mergedPlans = planMerger.mergedPlans()
-      subplansByLevel += mergedPlans.map { mergedPlan =>
+      subplansByLevel += mergedPlans.zipWithIndex.map { case (mergedPlan, idx) =>
         val planWithoutReferences = if (subplansByLevel.isEmpty) {
           // Level 0 plans can't contain references
           mergedPlan.plan
@@ -186,18 +189,25 @@ object MergeSubplans extends Rule[LogicalPlan] {
           removeReferences(mergedPlan.plan, subplansByLevel)
         }
         if (mergedPlan.merged) {
-          CTERelationDef(
-            Project(
-              Seq(Alias(
-                CreateNamedStruct(
-                  planWithoutReferences.output.flatMap(a => Seq(Literal(a.name), a))),
-                "mergedValue")()),
-              planWithoutReferences),
-            underSubquery = true)
+          if (groupingAggregateMerges.contains((currentLevel, idx))) {
+            // Grouping aggregates produce multiple rows, so we don't wrap in a struct.
+            // The CTE output is the aggregate's output directly.
+            CTERelationDef(planWithoutReferences, underSubquery = false)
+          } else {
+            CTERelationDef(
+              Project(
+                Seq(Alias(
+                  CreateNamedStruct(
+                    planWithoutReferences.output.flatMap(a => Seq(Literal(a.name), a))),
+                  "mergedValue")()),
+                planWithoutReferences),
+              underSubquery = true)
+          }
         } else {
           planWithoutReferences
         }
       }
+      currentLevel += 1
     }
 
     // Replace references back to `CTERelationRef`s or to original subplans.
@@ -219,7 +229,10 @@ object MergeSubplans extends Rule[LogicalPlan] {
   private def insertReferences(
       plan: LogicalPlan,
       root: Boolean,
-      planMergers: ArrayBuffer[PlanMerger]): (LogicalPlan, Int) = {
+      planMergers: ArrayBuffer[PlanMerger],
+      groupingAggregateMerges: scala.collection.mutable.HashSet[(Int, Int)],
+      insideScalarSubquery: Boolean = false
+      ): (LogicalPlan, Int) = {
     if (!plan.containsAnyPattern(AGGREGATE, SCALAR_SUBQUERY)) {
       return (plan, 0)
     }
@@ -230,7 +243,9 @@ object MergeSubplans extends Rule[LogicalPlan] {
     val nodeSubqueriesWithReferences =
       plan.transformExpressionsWithPruning(_.containsPattern(SCALAR_SUBQUERY)) {
         case s: ScalarSubquery if !s.isCorrelated && s.deterministic =>
-          val (planWithReferences, level) = insertReferences(s.plan, true, planMergers)
+          val (planWithReferences, level) =
+            insertReferences(s.plan, true, planMergers, groupingAggregateMerges,
+              insideScalarSubquery = true)
 
           // The subquery could contain a hint that is not propagated once we merge it, but as a
           // non-correlated scalar subquery won't be turned into a Join the loss of hints is fine.
@@ -252,7 +267,9 @@ object MergeSubplans extends Rule[LogicalPlan] {
     // propagated from subqueries and the level propagated from child nodes.
     val (planWithReferences, level) = nodeSubqueriesWithReferences match {
       case a: Aggregate if !root && a.groupingExpressions.isEmpty =>
-        val (childWithReferences, levelFromChild) = insertReferences(a.child, false, planMergers)
+        val (childWithReferences, levelFromChild) =
+          insertReferences(a.child, false, planMergers, groupingAggregateMerges,
+            insideScalarSubquery)
         val aggregateWithReferences = a.withNewChildren(Seq(childWithReferences))
 
         // Level is the maximum of the level from subqueries and the level from child.
@@ -271,9 +288,32 @@ object MergeSubplans extends Rule[LogicalPlan] {
         // This is a non-grouping aggregate node so propagate the level of the node + 1 to its
         // parent
         (aggregateReference, level + 1)
+      case a: Aggregate if !root && !insideScalarSubquery && a.groupingExpressions.nonEmpty =>
+        val (childWithReferences, levelFromChild) =
+          insertReferences(a.child, false, planMergers, groupingAggregateMerges)
+        val aggregateWithReferences = a.withNewChildren(Seq(childWithReferences))
+
+        val level = levelFromChild.max(levelFromSubqueries)
+
+        val mergeResult = getPlanMerger(planMergers, level).merge(aggregateWithReferences, false)
+
+        // Track this as a grouping aggregate merge for CTE construction.
+        groupingAggregateMerges.add((level, mergeResult.mergedPlanIndex))
+
+        val outputIndices = aggregateWithReferences.output.map(mergeResult.outputMap)
+        val aggregateReference = GroupingAggregateReference(
+          level,
+          mergeResult.mergedPlanIndex,
+          outputIndices,
+          a.output
+        )
+
+        (aggregateReference, level + 1)
       case o =>
         val (newChildren, levelsFromChildren) =
-          o.children.map(insertReferences(_, false, planMergers)).unzip
+          o.children.map(
+            insertReferences(_, false, planMergers, groupingAggregateMerges,
+              insideScalarSubquery)).unzip
         // Level is the maximum of the level from subqueries and the level from the children.
         (o.withNewChildren(newChildren), (levelFromSubqueries +: levelsFromChildren).max)
     }
@@ -309,7 +349,18 @@ object MergeSubplans extends Rule[LogicalPlan] {
       plan: LogicalPlan,
       subplansByLevel: ArrayBuffer[IndexedSeq[LogicalPlan]]) = {
     plan.transformUpWithPruning(
-        _.containsAnyPattern(NO_GROUPING_AGGREGATE_REFERENCE, SCALAR_SUBQUERY_REFERENCE)) {
+        _.containsAnyPattern(GROUPING_AGGREGATE_REFERENCE, NO_GROUPING_AGGREGATE_REFERENCE,
+          SCALAR_SUBQUERY_REFERENCE)) {
+      case gar: GroupingAggregateReference =>
+        subplansByLevel(gar.level)(gar.mergedPlanIndex) match {
+          case cte: CTERelationDef =>
+            val ref = CTERelationRef(cte.id, _resolved = true, cte.output, cte.isStreaming)
+            val projectList = gar.outputIndices.zip(gar.output).map { case (i, a) =>
+              Alias(ref.output(i), a.name)(a.exprId)
+            }
+            Project(projectList, ref)
+          case o => o
+        }
       case ngar: NonGroupingAggregateReference =>
         subplansByLevel(ngar.level)(ngar.mergedPlanIndex) match {
           case cte: CTERelationDef =>
@@ -376,4 +427,21 @@ case class NonGroupingAggregateReference(
     outputIndices: Seq[Int],
     override val output: Seq[Attribute]) extends LeafNode {
   final override val nodePatterns: Seq[TreePattern] = Seq(NO_GROUPING_AGGREGATE_REFERENCE)
+}
+
+/**
+ * Temporal reference to a grouping aggregate which is added to a `PlanMerger`.
+ *
+ * @param level The level of the replaced aggregate. It defines the `PlanMerger` instance into which
+ *              the aggregate is merged.
+ * @param mergedPlanIndex The index of the merged plan in the `PlanMerger`.
+ * @param outputIndices The indices of the output attributes of the merged plan.
+ * @param output The output of original aggregate.
+ */
+case class GroupingAggregateReference(
+    level: Int,
+    mergedPlanIndex: Int,
+    outputIndices: Seq[Int],
+    override val output: Seq[Attribute]) extends LeafNode {
+  final override val nodePatterns: Seq[TreePattern] = Seq(GROUPING_AGGREGATE_REFERENCE)
 }
