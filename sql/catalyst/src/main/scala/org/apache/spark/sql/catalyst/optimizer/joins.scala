@@ -44,6 +44,15 @@ import org.apache.spark.util.Utils
  */
 object ReorderJoin extends Rule[LogicalPlan] with PredicateHelper {
   /**
+   * Checks if an expression is an equi-join condition (e.g., a = b).
+   */
+  private def isEquiJoinCondition(expr: Expression): Boolean = expr match {
+    case EqualTo(_: AttributeReference, _: AttributeReference) => true
+    case EqualNullSafe(_: AttributeReference, _: AttributeReference) => true
+    case _ => false
+  }
+
+  /**
    * Join a list of plans together and push down the conditions into them.
    *
    * The joined plan are picked from left to right, prefer those has at least one join condition.
@@ -72,8 +81,8 @@ object ReorderJoin extends Rule[LogicalPlan] with PredicateHelper {
       }
     } else {
       val (left, _) :: rest = input.toList
-      // find out the first join that have at least one join condition
-      val conditionalJoin = rest.find { planJoinPair =>
+      // Find all joins that have at least one join condition with the current left plan.
+      val conditionalJoins = rest.filter { planJoinPair =>
         val plan = planJoinPair._1
         val refs = left.outputSet ++ plan.outputSet
         conditions
@@ -81,8 +90,27 @@ object ReorderJoin extends Rule[LogicalPlan] with PredicateHelper {
           .filterNot(r => r.references.nonEmpty && canEvaluate(r, plan))
           .exists(_.references.subsetOf(refs))
       }
-      // pick the next one if no condition left
-      val (right, innerJoinType) = conditionalJoin.getOrElse(rest.head)
+
+      // Among candidates with join conditions, pick the best one using heuristics:
+      // 1. Prefer equi-join conditions (enables hash join)
+      // 2. Among equal priority, prefer smaller tables (by sizeInBytes)
+      val (right, innerJoinType) = if (conditionalJoins.isEmpty) {
+        rest.head
+      } else if (conditionalJoins.size == 1) {
+        conditionalJoins.head
+      } else {
+        conditionalJoins.minBy { planJoinPair =>
+          val plan = planJoinPair._1
+          val refs = left.outputSet ++ plan.outputSet
+          val joinConds = conditions
+            .filterNot(l => l.references.nonEmpty && canEvaluate(l, left))
+            .filterNot(r => r.references.nonEmpty && canEvaluate(r, plan))
+            .filter(_.references.subsetOf(refs))
+          val hasEquiCond = joinConds.exists(isEquiJoinCondition)
+          // Sort key: (!hasEquiCond, sizeInBytes) — false < true, so equi-join comes first
+          (!hasEquiCond, plan.stats.sizeInBytes)
+        }
+      }
 
       val joinedRefs = left.outputSet ++ right.outputSet
       val (joinConditions, others) = conditions.partition(

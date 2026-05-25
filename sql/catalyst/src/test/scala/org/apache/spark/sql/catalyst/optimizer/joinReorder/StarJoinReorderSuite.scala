@@ -220,8 +220,8 @@ class StarJoinReorderSuite extends JoinReorderPlanTestBase with StatsEstimationT
       f1.join(d1.where(nameToAttr("d1_c2") === 2), Inner,
           Some(nameToAttr("f1_fk1") === nameToAttr("d1_pk1")))
         .join(d3, Inner, Some(nameToAttr("f1_fk3") === nameToAttr("d3_pk1")))
-        .join(d2, Inner, Some(nameToAttr("f1_fk2") < nameToAttr("d2_pk1")))
         .join(s3, Inner, Some(nameToAttr("d3_fk1") === nameToAttr("s3_pk1")))
+        .join(d2, Inner, Some(nameToAttr("f1_fk2") < nameToAttr("d2_pk1")))
         .select(outputsOf(d1, f1, d2, s3, d3): _*)
 
     assertEqualJoinPlans(Optimize, query, expected)
@@ -253,10 +253,10 @@ class StarJoinReorderSuite extends JoinReorderPlanTestBase with StatsEstimationT
           (nameToAttr("d3_fk1") === nameToAttr("s3_pk1")))
 
     val expected =
-      f1.join(d1.where(nameToAttr("d1_c2") === 2), Inner,
+      f1.join(d2, Inner, Some(nameToAttr("f1_fk2") === nameToAttr("d2_c4")))
+        .join(d1.where(nameToAttr("d1_c2") === 2), Inner,
           Some(nameToAttr("f1_fk1") === nameToAttr("d1_pk1")))
         .join(d3, Inner, Some(nameToAttr("f1_fk3") === nameToAttr("d3_pk1")))
-        .join(d2, Inner, Some(nameToAttr("f1_fk2") === nameToAttr("d2_c4")))
         .join(s3, Inner, Some(nameToAttr("d3_fk1") === nameToAttr("s3_pk1")))
         .select(outputsOf(d1, f1, d2, s3, d3): _*)
 
@@ -290,11 +290,11 @@ class StarJoinReorderSuite extends JoinReorderPlanTestBase with StatsEstimationT
           (nameToAttr("d3_fk1") === nameToAttr("s3_pk1")))
 
     val expected =
-      f1.join(d1.where(nameToAttr("d1_c2") === 2), Inner,
+      f1.join(d2, Inner, Some(nameToAttr("f1_fk2") === nameToAttr("d2_c2")))
+        .join(d1.where(nameToAttr("d1_c2") === 2), Inner,
           Some(nameToAttr("f1_fk1") === nameToAttr("d1_pk1")))
         .join(d3, Inner, Some(nameToAttr("f1_fk3") === nameToAttr("d3_pk1")))
-        .join(d2, Inner, Some(nameToAttr("f1_fk2") === nameToAttr("d2_c2")))
-        .join(s3, Inner, Some(nameToAttr("d3_fk1") < nameToAttr("s3_pk1")))
+        .join(s3, Inner, Some(nameToAttr("d3_fk1") === nameToAttr("s3_pk1")))
         .select(outputsOf(d1, f1, d2, s3, d3): _*)
 
     assertEqualJoinPlans(Optimize, query, expected)
@@ -329,11 +329,12 @@ class StarJoinReorderSuite extends JoinReorderPlanTestBase with StatsEstimationT
           (d3_fk1 === nameToAttr("s3_pk1")))
 
     val equivQuery =
-      d3_ns.join(f1, Inner, Some(nameToAttr("f1_fk3") === d3_pk1))
-        .join(d1, Inner, Some(nameToAttr("f1_fk1") === nameToAttr("d1_pk1")))
+      d3_ns.join(s3, Inner, Some(d3_fk1 === nameToAttr("s3_pk1")))
+        .join(f1, Inner, Some(nameToAttr("f1_fk3") === d3_pk1))
         .join(d2.where(nameToAttr("d2_c2") === 2), Inner,
           Some(nameToAttr("f1_fk2") === nameToAttr("d2_pk1")))
-        .join(s3, Inner, Some(d3_fk1 === nameToAttr("s3_pk1")))
+        .join(d1, Inner, Some(nameToAttr("f1_fk1") === nameToAttr("d1_pk1")))
+        .select(outputsOf(d3_ns, f1, d1, d2, s3): _*)
 
     assertEqualJoinPlans(Optimize, query, equivQuery)
   }
@@ -364,9 +365,10 @@ class StarJoinReorderSuite extends JoinReorderPlanTestBase with StatsEstimationT
     val expected =
       d3.select($"d3_fk1").select(sum($"d3_fk1").as("col"))
         .join(f1, Inner, Some(nameToAttr("f1_fk3") === "col".attr))
-        .join(d1, Inner, Some(nameToAttr("f1_fk1") === nameToAttr("d1_pk1")))
         .join(d2.where(nameToAttr("d2_c2") === 2), Inner,
           Some(nameToAttr("f1_fk2") === nameToAttr("d2_pk1")))
+        .join(d1, Inner, Some(nameToAttr("f1_fk1") === nameToAttr("d1_pk1")))
+        .select(outputsOf(subq, f1, d1, d2): _*)
 
     assertEqualJoinPlans(Optimize, query, expected)
   }
@@ -397,10 +399,11 @@ class StarJoinReorderSuite extends JoinReorderPlanTestBase with StatsEstimationT
           (nameToAttr("f11_fk1") === nameToAttr("s3_pk1")))
 
     val equivQuery =
-      d1.join(f1, Inner, Some(nameToAttr("f1_fk1") === nameToAttr("d1_pk1")))
-        .join(f11, Inner, Some(nameToAttr("f1_fk3") === nameToAttr("f11_fk3")))
-        .join(d2.where(nameToAttr("d2_c2") === 2), Inner,
+      f1.join(d2.where(nameToAttr("d2_c2") === 2), Inner,
           Some(nameToAttr("f1_fk2") === nameToAttr("d2_pk1")))
+        .join(d1, Inner, Some(nameToAttr("f1_fk1") === nameToAttr("d1_pk1")))
+        .select(outputsOf(d1, f1, d2): _*)
+        .join(f11, Inner, Some(nameToAttr("f1_fk3") === nameToAttr("f11_fk3")))
         .join(s3, Inner, Some(nameToAttr("f11_fk1") === nameToAttr("s3_pk1")))
         .select(outputsOf(d1, f11, f1, d2, s3): _*)
 
@@ -434,9 +437,9 @@ class StarJoinReorderSuite extends JoinReorderPlanTestBase with StatsEstimationT
 
     val expected =
       d1.join(f1, Inner, Some(nameToAttr("f1_fk1") === nameToAttr("d1_c4")))
-        .join(d3, Inner, Some(nameToAttr("f1_fk3") === nameToAttr("d3_c4")))
         .join(d2.where(nameToAttr("d2_c2") === 2), Inner,
           Some(nameToAttr("f1_fk2") === nameToAttr("d2_c4")))
+        .join(d3, Inner, Some(nameToAttr("f1_fk3") === nameToAttr("d3_c4")))
         .join(s3, Inner, Some(nameToAttr("d3_fk1") === nameToAttr("s3_pk1")))
         .select(outputsOf(d1, d3, f1, d2, s3): _*)
 
@@ -470,9 +473,9 @@ class StarJoinReorderSuite extends JoinReorderPlanTestBase with StatsEstimationT
 
     val expected =
       d1.join(f1, Inner, Some(abs(nameToAttr("f1_fk1")) === nameToAttr("d1_pk1")))
-        .join(d3, Inner, Some(nameToAttr("f1_fk3") === nameToAttr("d3_pk1")))
         .join(d2.where(nameToAttr("d2_c2") === 2), Inner,
           Some(nameToAttr("f1_fk2") === nameToAttr("d2_pk1")))
+        .join(d3, Inner, Some(nameToAttr("f1_fk3") === nameToAttr("d3_pk1")))
         .join(s3, Inner, Some(nameToAttr("d3_fk1") === nameToAttr("s3_pk1")))
         .select(outputsOf(d1, d3, f1, d2, s3): _*)
 
@@ -505,9 +508,9 @@ class StarJoinReorderSuite extends JoinReorderPlanTestBase with StatsEstimationT
 
     val expected =
       d1.join(f1, Inner, Some(nameToAttr("f1_fk1") < nameToAttr("d1_pk1")))
-        .join(d3, Inner, Some(nameToAttr("f1_fk3") < nameToAttr("d3_pk1")))
         .join(d2.where(nameToAttr("d2_c2") === 2),
           Inner, Some(nameToAttr("f1_fk2") === nameToAttr("d2_pk1")))
+        .join(d3, Inner, Some(nameToAttr("f1_fk3") < nameToAttr("d3_pk1")))
         .join(s3, Inner, Some(nameToAttr("d3_fk1") === nameToAttr("s3_pk1")))
         .select(outputsOf(d1, d3, f1, d2, s3): _*)
 
@@ -540,8 +543,8 @@ class StarJoinReorderSuite extends JoinReorderPlanTestBase with StatsEstimationT
 
     val expected =
       d1.join(f1, Inner, Some(nameToAttr("f1_fk1") < nameToAttr("d1_pk1")))
-        .join(d3, Inner, Some(nameToAttr("f1_fk3") < nameToAttr("d3_pk1")))
         .join(d2, Inner, Some(nameToAttr("f1_fk2") < nameToAttr("d2_pk1")))
+        .join(d3, Inner, Some(nameToAttr("f1_fk3") < nameToAttr("d3_pk1")))
         .join(s3, Inner, Some(nameToAttr("d3_fk1") < nameToAttr("s3_pk1")))
         .select(outputsOf(d1, d3, f1, d2, s3): _*)
 
@@ -574,8 +577,8 @@ class StarJoinReorderSuite extends JoinReorderPlanTestBase with StatsEstimationT
 
     val expected =
       d1.join(f1, Inner, Some(nameToAttr("f1_fk1") === nameToAttr("d1_pk1")))
-        .join(d3, Inner, Some(nameToAttr("f1_fk3") === nameToAttr("d3_pk1")))
         .join(d2, Inner, Some(nameToAttr("f1_fk2") === nameToAttr("d2_pk1")))
+        .join(d3, Inner, Some(nameToAttr("f1_fk3") === nameToAttr("d3_pk1")))
         .join(s3, Inner, Some(nameToAttr("d3_fk1") === nameToAttr("s3_pk1")))
         .select(outputsOf(d1, d3, f1, d2, s3): _*)
 
