@@ -110,6 +110,19 @@ public final class BytesToBytesMap extends MemoryConsumer {
    * while position {@code 2 * i + 1} in the array holds key's full 32-bit hashcode.
    */
   @Nullable private LongArray longArray;
+
+  /**
+   * A control byte array for Swiss Table-style fast probing. Each byte stores the top 7 bits
+   * of the hash (h2) for occupied slots, or EMPTY (0x80) for empty slots. This allows the
+   * probe loop to quickly skip non-matching slots by checking a single byte instead of
+   * reading the full 8-byte hash entry from longArray.
+   */
+  @Nullable private byte[] ctrl;
+  private static final byte CTRL_EMPTY = (byte) 0x80;
+
+  private static byte h2(int hash) {
+    return (byte) ((hash >>> 25) & 0x7F);
+  }
   // TODO: we're wasting 32 bits of space here; we can probably store fewer bits of the hashcode
   // and exploit word-alignment to use fewer bits to hold the address.  This might let us store
   // only one long per map entry, increasing the chance that this array will fit in cache at the
@@ -527,13 +540,16 @@ public final class BytesToBytesMap extends MemoryConsumer {
 
     int pos = hash & mask;
     int step = 1;
+    final byte h2val = h2(hash);
     while (true) {
       numProbes++;
-      if (longArray.get(pos * 2) == 0) {
+      byte c = ctrl[pos];
+      if (c == CTRL_EMPTY) {
         // This is a new key.
         loc.with(pos, hash, false);
         return;
-      } else {
+      } else if (c == h2val) {
+        // Control byte matches - check full hash and key
         long stored = longArray.get(pos * 2 + 1);
         if ((int) (stored) == hash) {
           // Full hash code matches.  Let's compare the keys for equality.
@@ -806,6 +822,7 @@ public final class BytesToBytesMap extends MemoryConsumer {
       if (!isDefined) {
         numKeys++;
         longArray.set(pos * 2 + 1, keyHashcode);
+        ctrl[pos] = h2(keyHashcode);
         isDefined = true;
 
         // If the map has reached its growth threshold, try to grow it.
@@ -868,6 +885,9 @@ public final class BytesToBytesMap extends MemoryConsumer {
     longArray = allocateArray(capacity * 2L);
     longArray.zeroOut();
 
+    this.ctrl = new byte[capacity];
+    java.util.Arrays.fill(this.ctrl, CTRL_EMPTY);
+
     this.growthThreshold = (int) (capacity * loadFactor);
     this.mask = capacity - 1;
   }
@@ -884,6 +904,7 @@ public final class BytesToBytesMap extends MemoryConsumer {
       freeArray(longArray);
       longArray = null;
     }
+    ctrl = null;
     Iterator<MemoryBlock> dataPagesIterator = dataPages.iterator();
     while (dataPagesIterator.hasNext()) {
       MemoryBlock dataPage = dataPagesIterator.next();
@@ -1005,6 +1026,7 @@ public final class BytesToBytesMap extends MemoryConsumer {
       }
       longArray.set(newPos * 2, keyPointer);
       longArray.set(newPos * 2 + 1, hashcode);
+      ctrl[newPos] = h2(hashcode);
     }
     freeArray(oldLongArray);
   }
