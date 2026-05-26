@@ -1968,6 +1968,7 @@ class MergeSubplansSuite extends PlanTest {
   }
 
   test("Merge grouping aggregates with same GROUP BY and child") {
+    withSQLConf(SQLConf.MERGE_SUBPLANS_GROUPING_AGGREGATE_ENABLED.key -> "true") {
     // Two grouping aggregates over the same table with the same GROUP BY key
     val agg1 = testRelation.groupBy($"b")(min($"a").as("min_a"), $"b")
     val agg2 = testRelation.groupBy($"b")(max($"a").as("max_a"), $"b")
@@ -1988,6 +1989,7 @@ class MergeSubplansSuite extends PlanTest {
         assert(a.aggregateExpressions.size >= 3,
           s"Expected at least 3 expressions (b, min_a, max_a), got ${a.aggregateExpressions.size}")
       case _ => fail(s"Expected Aggregate in CTE, got ${ctePlan.getClass.getSimpleName}")
+    }
     }
   }
 
@@ -2014,6 +2016,7 @@ class MergeSubplansSuite extends PlanTest {
   }
 
   test("Merge grouping aggregates preserves correct output") {
+    withSQLConf(SQLConf.MERGE_SUBPLANS_GROUPING_AGGREGATE_ENABLED.key -> "true") {
     val agg1 = testRelation.groupBy($"b")(sum($"a").as("sum_a"), $"b")
     val agg2 = testRelation.groupBy($"b")(avg($"a").as("avg_a"), $"b")
     val originalQuery = agg1.join(agg2)
@@ -2026,5 +2029,6 @@ class MergeSubplansSuite extends PlanTest {
     val optimizedOutput = optimized.output.map(_.name)
     assert(originalOutput == optimizedOutput,
       s"Output mismatch: expected $originalOutput, got $optimizedOutput")
+    }
   }
 }

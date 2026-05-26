@@ -6710,6 +6710,16 @@ object SQLConf {
       .booleanConf
       .createWithDefault(false)
 
+  val MERGE_SUBPLANS_GROUPING_AGGREGATE_ENABLED =
+    buildConf("spark.sql.optimizer.mergeSubplans.groupingAggregate.enabled")
+      .doc("When set to true, grouping aggregates with identical GROUP BY keys and the same " +
+        "child plan can be merged into a single aggregate stored as a CTE, eliminating " +
+        "redundant scans and shuffles.")
+      .version("4.3.0")
+      .withBindingPolicy(ConfigBindingPolicy.SESSION)
+      .booleanConf
+      .createWithDefault(false)
+
   val ERROR_MESSAGE_FORMAT = buildConf("spark.sql.error.messageFormat")
     .doc("When PRETTY, the error message consists of textual representation of error class, " +
       "message and query context. Stack traces are only shown for internal errors " +

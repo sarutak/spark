@@ -288,7 +288,8 @@ object MergeSubplans extends Rule[LogicalPlan] {
         // This is a non-grouping aggregate node so propagate the level of the node + 1 to its
         // parent
         (aggregateReference, level + 1)
-      case a: Aggregate if !root && !insideScalarSubquery && a.groupingExpressions.nonEmpty =>
+      case a: Aggregate if !root && !insideScalarSubquery && a.groupingExpressions.nonEmpty
+          && conf.getConf(SQLConf.MERGE_SUBPLANS_GROUPING_AGGREGATE_ENABLED) =>
         val (childWithReferences, levelFromChild) =
           insertReferences(a.child, false, planMergers, groupingAggregateMerges)
         val aggregateWithReferences = a.withNewChildren(Seq(childWithReferences))
