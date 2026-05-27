@@ -290,6 +290,9 @@ object MergeSubplans extends Rule[LogicalPlan] {
         (aggregateReference, level + 1)
       case a: Aggregate if !root && !insideScalarSubquery && a.groupingExpressions.nonEmpty
           && conf.getConf(SQLConf.MERGE_SUBPLANS_GROUPING_AGGREGATE_ENABLED) =>
+        // First, check if there's already a compatible aggregate in the cache by doing a
+        // lightweight probe. We process the child and attempt merge. If no merge occurs,
+        // we fall through to normal processing.
         val (childWithReferences, levelFromChild) =
           insertReferences(a.child, false, planMergers, groupingAggregateMerges)
         val aggregateWithReferences = a.withNewChildren(Seq(childWithReferences))
@@ -298,18 +301,23 @@ object MergeSubplans extends Rule[LogicalPlan] {
 
         val mergeResult = getPlanMerger(planMergers, level).merge(aggregateWithReferences, false)
 
-        // Track this as a grouping aggregate merge for CTE construction.
-        groupingAggregateMerges.add((level, mergeResult.mergedPlanIndex))
+        if (mergeResult.mergedPlan.merged) {
+          // Actually merged with another plan - create a reference
+          groupingAggregateMerges.add((level, mergeResult.mergedPlanIndex))
 
-        val outputIndices = aggregateWithReferences.output.map(mergeResult.outputMap)
-        val aggregateReference = GroupingAggregateReference(
-          level,
-          mergeResult.mergedPlanIndex,
-          outputIndices,
-          a.output
-        )
+          val outputIndices = aggregateWithReferences.output.map(mergeResult.outputMap)
+          val aggregateReference = GroupingAggregateReference(
+            level,
+            mergeResult.mergedPlanIndex,
+            outputIndices,
+            a.output
+          )
 
-        (aggregateReference, level + 1)
+          (aggregateReference, level + 1)
+        } else {
+          // No merge partner found - return the processed child as-is (same as case o =>)
+          (aggregateWithReferences, level + 1)
+        }
       case o =>
         val (newChildren, levelsFromChildren) =
           o.children.map(
