@@ -111,10 +111,6 @@ object TPCDSQueryBenchmark extends SqlBasedBenchmark with Logging {
         spark.conf.set(SQLConf.MERGE_SUBPLANS_GROUPING_AGGREGATE_ENABLED.key, "false")
         spark.sql(queryString).noop()
       }
-      benchmark.addCase(s"$name$nameSuffix (grouping agg merge)") { _ =>
-        spark.conf.set(SQLConf.MERGE_SUBPLANS_GROUPING_AGGREGATE_ENABLED.key, "true")
-        spark.sql(queryString).noop()
-      }
       benchmark.run()
     }
   }
