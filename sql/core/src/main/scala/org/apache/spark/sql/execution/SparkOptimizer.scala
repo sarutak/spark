@@ -64,6 +64,8 @@ class SparkOptimizer(
     Batch("MergeSubplans", Once,
       MergeSubplans,
       RewriteDistinctAggregates),
+    Batch("MergeGroupingAggregates", Once,
+      MergeGroupingAggregates),
     Batch("Pushdown Filters from PartitionPruning", fixedPoint,
       PushDownPredicates),
     Batch("Cleanup filters that cannot be pushed down", Once,
