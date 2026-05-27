@@ -219,9 +219,9 @@ jobs:
             sleep 3
           fi
         done
-        echo "Error: Failed to push after 5 attempts."
-        exit 1
+        echo "Error: Failed to push after 5 attempts. Results are available as artifacts."
     - name: Upload benchmark results
+      if: always()
       uses: actions/upload-artifact@v6
       with:
         name: benchmark-results-${{ inputs.jdk }}-${{ inputs.scala }}-${{ matrix.split }}
