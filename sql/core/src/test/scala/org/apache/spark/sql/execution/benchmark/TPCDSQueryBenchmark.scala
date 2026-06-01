@@ -106,10 +106,13 @@ object TPCDSQueryBenchmark extends SqlBasedBenchmark with Logging {
         case _ =>
       }
       val numRows = queryRelations.map(tableSizes.getOrElse(_, 0L)).sum
-      val mergeEnabled = sys.env.getOrElse("SPARK_MERGE_GROUPING_AGG", "false")
-      spark.conf.set(SQLConf.MERGE_GROUPING_AGGREGATES_ENABLED.key, mergeEnabled)
       val benchmark = new Benchmark("TPCDS", numRows, 2, output = output)
       benchmark.addCase(s"$name$nameSuffix") { _ =>
+        spark.conf.set(SQLConf.MERGE_GROUPING_AGGREGATES_ENABLED.key, "false")
+        spark.sql(queryString).noop()
+      }
+      benchmark.addCase(s"$name$nameSuffix (grouping agg merge)") { _ =>
+        spark.conf.set(SQLConf.MERGE_GROUPING_AGGREGATES_ENABLED.key, "true")
         spark.sql(queryString).noop()
       }
       benchmark.run()
