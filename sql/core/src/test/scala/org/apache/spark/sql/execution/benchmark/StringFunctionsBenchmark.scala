@@ -54,5 +54,21 @@ object StringFunctionsBenchmark extends SqlBasedBenchmark {
       }
       benchmark.run()
     }
+
+    runBenchmark("split") {
+      val splitDf = spark.range(N).to(new StructType().add("id", "int")).
+        withColumn("str",
+          concat(col("id"), lit(","), col("id") * 2, lit(","), col("id") * 3,
+            lit(",value1,value2,value3")))
+
+      val benchmark = new Benchmark("split", N, output = output)
+      benchmark.addCase("split(str, ',')", M) { _ =>
+        splitDf.selectExpr("split(str, ',')").noop()
+      }
+      benchmark.addCase("split(str, ',', 3)", M) { _ =>
+        splitDf.selectExpr("split(str, ',', 3)").noop()
+      }
+      benchmark.run()
+    }
   }
 }
