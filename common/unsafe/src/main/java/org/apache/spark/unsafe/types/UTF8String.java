@@ -1536,17 +1536,47 @@ public final class UTF8String implements Comparable<UTF8String>, Externalizable,
   }
 
   public UTF8String[] splitSQL(UTF8String delimiter, int limit) {
-    // if delimiter is empty string, skip the regex based splitting directly as regex
-    // treats empty string as matching anything, thus use the input directly.
+    // if delimiter is empty string, skip the splitting directly and use the input as-is.
     if (delimiter.numBytes() == 0) {
       return new UTF8String[]{this};
-    } else {
-      // we do not treat delimiter as a regex but consider the whole string of delimiter
-      // as the separator to split string. Java String's split, however, only accept
-      // regex as the pattern to split, thus we can quote the delimiter to escape special
-      // characters in the string.
-      return split(Pattern.quote(delimiter.toString()), limit);
     }
+
+    // Byte-matching based split: avoid toString() conversion and regex overhead.
+    if (limit == 0) {
+      limit = -1;
+    }
+
+    int delimLen = delimiter.numBytes;
+    int start = 0;
+    int count = 0;
+    // Initial capacity for delimiter positions; grows dynamically if needed.
+    int[] positions = new int[16];
+
+    while (start <= numBytes - delimLen) {
+      int found = find(delimiter, start);
+      if (found == -1) break;
+      if (limit > 0 && count >= limit - 1) break;
+      if (count >= positions.length) {
+        positions = java.util.Arrays.copyOf(positions, positions.length * 2);
+      }
+      positions[count] = found;
+      count++;
+      start = found + delimLen;
+    }
+
+    UTF8String[] result = new UTF8String[count + 1];
+    int srcStart = 0;
+    for (int i = 0; i < count; i++) {
+      int len = positions[i] - srcStart;
+      result[i] = len == 0 ? EMPTY_UTF8 : copyUTF8String(srcStart, positions[i] - 1);
+      srcStart = positions[i] + delimLen;
+    }
+    if (srcStart >= numBytes) {
+      result[count] = EMPTY_UTF8;
+    } else {
+      result[count] = copyUTF8String(srcStart, numBytes - 1);
+    }
+    return result;
   }
 
   private UTF8String[] split(String delimiter, int limit) {
