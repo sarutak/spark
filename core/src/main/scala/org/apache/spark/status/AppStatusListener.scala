@@ -432,7 +432,7 @@ private[spark] class AppStatusListener(
       missingStages.map(_.numTasks).sum
     }
 
-    val lastStageInfo = event.stageInfos.sortBy(_.stageId).lastOption
+    val lastStageInfo = event.stageInfos.maxByOption(_.stageId)
     val jobName = lastStageInfo.map(_.name).getOrElse("")
     val description = Option(event.properties)
       .flatMap { p => Option(p.getProperty(SparkContext.SPARK_JOB_DESCRIPTION)) }
