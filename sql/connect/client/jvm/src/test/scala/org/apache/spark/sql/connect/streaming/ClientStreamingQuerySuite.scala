@@ -569,7 +569,8 @@ class ClientStreamingQuerySuite extends QueryTest with RemoteSparkSession with L
       .start()
 
     try {
-      q.processAllAvailable()
+      // Process data 5 seconds.
+      Thread.sleep(5000)
       eventually(timeout(30.seconds)) {
         assert(q.isActive)
         assert(listener.start.length == 1)
