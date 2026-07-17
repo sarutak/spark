@@ -354,7 +354,7 @@
     <ojdbc17.version>23.26.1.0.0</ojdbc17.version>
     <databricks.jdbc.version>3.3.1</databricks.jdbc.version>
     <snowflake.jdbc.version>4.1.0</snowflake.jdbc.version>
-    <terajdbc.version>20.00.00.39</terajdbc.version>
+    <terajdbc.version>20.00.00.58</terajdbc.version>
     <!-- Used for SBT build to retrieve the Spark version -->
     <spark.version>${project.version}</spark.version>
     <maven-jar-plugin.version>3.5.0</maven-jar-plugin.version>
