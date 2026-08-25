@@ -1146,6 +1146,303 @@ achieved by setting `spark.kubernetes.hadoop.configMapName` to a pre-existing Co
     local:///opt/spark/examples/jars/spark-examples_<VERSION>.jar \
     <HDFS_FILE_LOCATION>
 ```
+# OIDC Credential Propagation
+
+Spark supports propagating short-lived, per-workload or per-user credentials to executors in
+environments that use OIDC / OAuth 2.0 for authentication, such as Spark on Kubernetes accessing
+cloud object storage. This generalizes the delegation-token propagation model described in the
+[Kerberos](#kerberos) section above to OIDC-based systems: instead of obtaining Hadoop delegation
+tokens from a KDC, the driver reads an OIDC identity token (a JWT), exchanges it for short-lived
+service credentials, and distributes those credentials to executors, refreshing them automatically
+for long-running applications.
+
+This feature is disabled by default. It is enabled by setting `spark.security.oidc.enabled=true`
+and providing an identity token file via `spark.security.oidc.identityToken.file`. When disabled,
+none of the components described below are started and existing applications are unaffected.
+
+As with the Kerberos path, Spark's role here is limited to propagating delegated credentials, not
+to authenticating users or enforcing access control. The downstream service (for example, a cloud
+IAM system or an object store) performs authorization using the credential Spark propagates. The
+raw identity token is consumed only on the driver; executors receive only the short-lived service
+credentials derived from it.
+
+## How it works
+
+When enabled, credential propagation runs on independent threads alongside the Kerberos delegation
+token machinery, and the two coexist without interfering with each other. A cluster that accesses
+HDFS via Kerberos and cloud storage via OIDC at the same time is a supported configuration.
+
+Credential propagation applies to cluster deployments where the driver and executors run in
+separate processes (for example, Kubernetes, Standalone, and YARN). In `local` mode there are no
+separate executor processes, so there is nothing to propagate credentials to: enabling
+`spark.security.oidc.enabled` in `local` mode has no effect (the credential manager is not
+started, and no error is raised). To exercise the feature end to end, run against a cluster
+manager.
+
+1. On the driver, a token ingestor reads the OIDC identity token from the configured file and
+   produces a driver-only user context. Kubernetes projected ServiceAccount tokens (which are
+   rotated automatically by the kubelet) and externally-injected per-user tokens are both supported,
+   because the ingestor detects file rotation and reloads the token.
+1. A driver-side credential manager (a sibling of the Kerberos delegation token manager) passes the
+   user context to a `CredentialProvider` for each configured scheme, obtaining a short-lived service
+   credential.
+1. The service credentials are serialized and distributed to all registered executors via an RPC
+   message. Newly-registered executors (for example, those created by dynamic allocation) receive
+   the current credentials as part of their registration response, so they have valid credentials
+   before running any task.
+1. The manager schedules the next renewal ahead of the earliest expiry (the minimum of the identity
+   token expiry and the service credential expiry, minus a configurable safety margin), and retries
+   with exponential backoff on failure.
+1. On the executor, connector-specific code reads the current service credential from an in-memory
+   store on each access, so credential refreshes are picked up without restarting tasks or
+   invalidating filesystem caches.
+
+The components mirror the existing Kerberos delegation token path:
+
+| OIDC path | Kerberos path |
+|---|---|
+| OIDC identity token file | Keytab / ticket cache |
+| Driver-side credential manager | `HadoopDelegationTokenManager` |
+| `CredentialProvider.resolve()` | `HadoopDelegationTokenProvider.obtainDelegationTokens()` |
+| `UpdateUserCredentials` RPC | `UpdateDelegationTokens` RPC |
+| Executor credential store | `SparkEnv` delegation credentials |
+
+## Security model
+
+The security model closely follows the Kerberos delegation token model, where executors receive
+delegation tokens rather than the original ticket-granting ticket.
+
+* The raw identity token never leaves the driver. Executors receive only short-lived, scoped
+  service credentials produced by a `CredentialProvider`. A service credential is narrower and
+  shorter-lived than the original identity token, but should still be treated as sensitive.
+* The user context redacts the raw token in its `toString()` representation, and the token is
+  redacted from serialized (JSON) forms, so it is not written to logs.
+* Service credentials are not written to shuffle files, event logs, or checkpoints.
+* Credentials are carried over Spark's RPC channels and therefore rely on Spark's existing RPC
+  encryption configuration (`spark.ssl.*`). Enabling credential propagation without RPC encryption
+  configured logs a warning. Operators are strongly encouraged to enable RPC encryption whenever
+  credential propagation is enabled. See [Network Encryption](#network-encryption) for details.
+
+## Custom CredentialProvider
+
+The credential exchange step is pluggable. Spark discovers implementations of
+[`CredentialProvider`](api/java/org/apache/spark/security/CredentialProvider.html) using the Java
+Services mechanism (see `java.util.ServiceLoader`): an implementation is made available to Spark by
+listing its fully-qualified class name in the corresponding file in the jar's `META-INF/services`
+directory, exactly as with custom `HadoopDelegationTokenProvider` implementations for the Kerberos
+path.
+
+A `CredentialProvider` declares the URI schemes it supports (for example, `s3a`) and exchanges the
+driver-side user context for a
+[`ServiceCredential`](api/java/org/apache/spark/security/ServiceCredential.html) scoped to a target
+URI. When more than one provider is registered for the same scheme, the provider used for that
+scheme is selected via `spark.security.oidc.provider.<scheme>`. The configuration passed to a
+provider is scoped to keys starting with `spark.security.oidc.`, so unrelated configuration is not
+exposed to third-party providers.
+
+The `CredentialProvider` SPI and its related types
+([`UserContext`](api/java/org/apache/spark/security/UserContext.html),
+[`ServiceCredential`](api/java/org/apache/spark/security/ServiceCredential.html), and
+[`UserCredentials`](api/java/org/apache/spark/security/UserCredentials.html)) are annotated
+`@DeveloperApi` and may evolve in minor releases.
+
+Spark ships a reference implementation for AWS S3 / STS-compatible endpoints in an optional module.
+See [AWS reference provider](#aws-reference-provider) below for how to enable and configure it, and
+[Running Spark on Kubernetes](running-on-kubernetes.html#oidc-credential-propagation) for complete
+configuration examples using Kubernetes projected ServiceAccount tokens and per-user identity tokens.
+
+## Configuration
+
+The following options control the core (cloud-agnostic) credential propagation framework.
+Provider-specific options (such as those for the AWS reference provider) are documented alongside
+each provider.
+
+<table class="spark-config">
+<thead><tr><th>Property Name</th><th>Default</th><th>Meaning</th><th>Since Version</th></tr></thead>
+<tr>
+  <td><code>spark.security.oidc.enabled</code></td>
+  <td><code>false</code></td>
+  <td>
+    Whether to enable OIDC credential propagation. When enabled, the driver reads an identity
+    token from a file, exchanges it for short-lived service credentials via
+    <code>CredentialProvider</code> implementations, and propagates those credentials to executors.
+    When disabled (the default), the feature's components are not started.
+  </td>
+  <td>4.4.0</td>
+</tr>
+<tr>
+  <td><code>spark.security.oidc.identityToken.file</code></td>
+  <td>(none)</td>
+  <td>
+    Path to the OIDC identity token file on the driver. Required when
+    <code>spark.security.oidc.enabled</code> is <code>true</code>. The file should contain a JWT
+    (for example, a Kubernetes projected ServiceAccount token). The file is re-read when it is
+    rotated, so automatically-rotated tokens are supported.
+  </td>
+  <td>4.4.0</td>
+</tr>
+<tr>
+  <td><code>spark.security.oidc.provider.&lt;scheme&gt;</code></td>
+  <td>(none)</td>
+  <td>
+    Selects the <code>CredentialProvider</code> to use for a given URI scheme (for example,
+    <code>s3a</code>) when more than one provider is registered for that scheme. The value is the
+    fully-qualified class name of the provider. When only one provider is registered for a scheme,
+    this option is not required.
+  </td>
+  <td>4.4.0</td>
+</tr>
+<tr>
+  <td><code>spark.security.oidc.renewal.safetyMargin</code></td>
+  <td><code>60s</code></td>
+  <td>
+    How long before credential expiry to trigger renewal. Credentials are refreshed at
+    <code>min(identity token expiry, service credential expiry)</code> minus this margin.
+  </td>
+  <td>4.4.0</td>
+</tr>
+<tr>
+  <td><code>spark.security.oidc.renewal.minInterval</code></td>
+  <td><code>30s</code></td>
+  <td>
+    Minimum interval between credential renewal attempts. This prevents tight renewal loops when
+    credentials have very short lifetimes or when repeated failures would otherwise cause rapid
+    retries.
+  </td>
+  <td>4.4.0</td>
+</tr>
+</table>
+
+## AWS reference provider
+
+Spark ships a reference `CredentialProvider` implementation for Amazon S3 and any STS-compatible
+endpoint (such as MinIO or Ceph) in the optional `credential-aws` module. It calls
+`sts:AssumeRoleWithWebIdentity` with the identity token and a configured IAM role, and returns
+temporary credentials as the `fs.s3a.access.key`, `fs.s3a.secret.key`, and `fs.s3a.session.token`
+properties consumed by the S3A connector.
+
+### Enabling the AWS reference provider
+
+The reference provider is packaged in the `credential-aws` module, which is not part of the default
+Spark distribution (it is kept separate so that the AWS SDK is not added to the core classpath).
+
+The recommended way to make it available -- especially for cluster deployments such as Spark on
+Kubernetes -- is to build a custom Spark distribution or container image that includes the module,
+using the `-Pcredential-aws` profile. Reading and writing S3 data additionally requires the S3A
+connector (`hadoop-aws`), provided by the `hadoop-cloud` module (the `-Phadoop-cloud` profile); the
+two modules are designed to be used together and pin the AWS SDK to the same version, so build with
+both:
+
+```
+./dev/make-distribution.sh --pip -Pkubernetes -Pcredential-aws -Phadoop-cloud
+```
+
+Baking the module into the image keeps executor startup self-contained and avoids each executor
+resolving artifacts from a remote repository at launch time, which matters when many executors
+start (for example, with dynamic allocation).
+
+Alternatively, for interactive use or one-off jobs, the module can be fetched from Maven Central at
+submit time with `--packages` (this also works in Kubernetes cluster mode):
+
+```
+--packages org.apache.spark:spark-credential-aws_{{site.SCALA_BINARY_VERSION}}:{{site.SPARK_VERSION_SHORT}}
+```
+
+Once the module is on the classpath, the provider is discovered automatically via `ServiceLoader`.
+Enable credential propagation and point Spark at the identity token file (on Kubernetes this is
+typically a projected ServiceAccount token), then configure the IAM role to assume:
+
+```
+spark.security.oidc.enabled                 true
+spark.security.oidc.identityToken.file      /var/run/secrets/oidc/token
+spark.security.oidc.aws.roleArn             arn:aws:iam::123456789012:role/spark-data-access
+```
+
+When credential propagation is enabled and you have not explicitly set
+`fs.s3a.aws.credentials.provider`, Spark automatically configures the S3A connector on executors to
+read the propagated credentials by setting:
+
+```
+spark.hadoop.fs.s3a.aws.credentials.provider org.apache.spark.security.aws.SparkOidcAwsCredentialsProvider
+```
+
+If you set `fs.s3a.aws.credentials.provider` yourself, Spark does not override it.
+
+For complete, deployment-ready examples on Kubernetes -- including how to mount a projected
+ServiceAccount token (workload-level identity) or an externally-injected per-user identity token --
+see [OIDC Credential Propagation](running-on-kubernetes.html#oidc-credential-propagation) on the
+Kubernetes page.
+
+### Using a non-AWS STS-compatible endpoint
+
+The provider works with any STS-compatible endpoint by setting
+`spark.security.oidc.aws.stsEndpoint` (and, if needed, `spark.security.oidc.aws.region`). For
+example, to target a MinIO STS endpoint:
+
+```
+spark.security.oidc.aws.stsEndpoint https://minio.example.com
+spark.security.oidc.aws.region      us-east-1
+```
+
+### AWS reference provider configuration
+
+These options are read by the AWS reference provider (from the `credential-aws` module) and are
+only relevant when it is on the classpath and credential propagation is enabled.
+
+<table class="spark-config">
+<thead><tr><th>Property Name</th><th>Default</th><th>Meaning</th><th>Since Version</th></tr></thead>
+<tr>
+  <td><code>spark.security.oidc.aws.roleArn</code></td>
+  <td>(none)</td>
+  <td>
+    The ARN of the IAM role to assume via <code>AssumeRoleWithWebIdentity</code>. Required when the
+    AWS reference provider is used. The role's trust policy must allow the identity provider that
+    issued the token (for example, the Kubernetes cluster's OIDC issuer).
+  </td>
+  <td>4.4.0</td>
+</tr>
+<tr>
+  <td><code>spark.security.oidc.aws.sessionName</code></td>
+  <td><code>spark-oidc</code></td>
+  <td>
+    The role session name attached to the assumed-role session. It appears in CloudTrail records
+    and can be used for auditing. Must match <code>[a-zA-Z0-9_+=,.@-]{2,64}</code>.
+  </td>
+  <td>4.4.0</td>
+</tr>
+<tr>
+  <td><code>spark.security.oidc.aws.durationSeconds</code></td>
+  <td>(STS default, 3600)</td>
+  <td>
+    The requested lifetime, in seconds, of the temporary credentials. Must be between
+    <code>900</code> (15 minutes) and <code>43200</code> (12 hours), subject to the maximum
+    session duration configured on the IAM role. When unset, the STS default (1 hour) applies.
+  </td>
+  <td>4.4.0</td>
+</tr>
+<tr>
+  <td><code>spark.security.oidc.aws.region</code></td>
+  <td>(SDK default)</td>
+  <td>
+    The AWS region for the STS client. When unset and no custom endpoint is configured, the AWS
+    SDK's default region resolution applies (for example, the <code>AWS_REGION</code> environment
+    variable or the shared config profile). When a custom endpoint is set without a region,
+    <code>us-east-1</code> is used as a placeholder.
+  </td>
+  <td>4.4.0</td>
+</tr>
+<tr>
+  <td><code>spark.security.oidc.aws.stsEndpoint</code></td>
+  <td>(none)</td>
+  <td>
+    A custom STS endpoint URL. Set this to target an STS-compatible endpoint other than AWS STS,
+    such as MinIO or Ceph. When unset, the AWS SDK's default STS endpoint for the resolved region
+    is used.
+  </td>
+  <td>4.4.0</td>
+</tr>
+</table>
+
 # Event Logging
 
 If your applications are using event logging, the directory where the event logs go
