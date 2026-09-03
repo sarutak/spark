@@ -307,7 +307,14 @@ In both examples, the driver reads the identity token, exchanges it for temporar
 `sts:AssumeRoleWithWebIdentity`, and propagates those credentials to executors. The raw token stays
 on the driver; executors only ever receive the short-lived S3 credentials. Because credentials are
 carried over Spark's RPC channels, enable [RPC encryption](security.html#network-encryption)
-(`spark.ssl.*`) whenever you enable credential propagation.
+whenever you enable credential propagation.
+
+The examples below enable AES-based RPC encryption with `spark.authenticate=true` and
+`spark.network.crypto.enabled=true`. On Kubernetes, Spark automatically generates and distributes
+the authentication secret, so this requires no additional key material. Alternatively, Spark
+supports SSL-based RPC encryption (`spark.ssl.rpc.enabled=true`), which requires configuring a
+key store and related settings. For the full set of options and how to configure them, see
+[Network Encryption](security.html#network-encryption).
 
 These examples assume a Spark image built with both the `credential-aws` and `hadoop-cloud`
 modules (`-Pcredential-aws -Phadoop-cloud`), so that the reference provider and the S3A connector
@@ -352,7 +359,8 @@ Then submit with credential propagation enabled:
     --master k8s://<KUBERNETES_MASTER_ENDPOINT> \
     --conf spark.kubernetes.container.image=<spark-image-with-credential-aws> \
     --conf spark.kubernetes.driver.podTemplateFile=driver-pod-template.yaml \
-    --conf spark.ssl.rpc.enabled=true \
+    --conf spark.authenticate=true \
+    --conf spark.network.crypto.enabled=true \
     --conf spark.security.oidc.enabled=true \
     --conf spark.security.oidc.identityToken.file=/var/run/secrets/oidc/token \
     --conf spark.security.oidc.aws.roleArn=arn:aws:iam::123456789012:role/spark-data-access \
@@ -366,7 +374,7 @@ RPC and do not read the token themselves.
 
 For per-user access control, the identity token represents an individual user rather than the
 workload. Delivering such a token to the driver pod is outside Spark's scope and is handled by
-existing Kubernetes mechanisms -- for example, mounting a
+existing Kubernetes mechanisms, for example by mounting a
 [Secret](https://kubernetes.io/docs/concepts/configuration/secret/) that an external system (such
 as a sidecar or an admission webhook) populates with the user's token. Spark simply reads the token
 from the configured file path.
@@ -385,7 +393,8 @@ kubectl create secret generic user-oidc-token \
     --master k8s://<KUBERNETES_MASTER_ENDPOINT> \
     --conf spark.kubernetes.container.image=<spark-image-with-credential-aws> \
     --conf spark.kubernetes.driver.secrets.user-oidc-token=/etc/oidc \
-    --conf spark.ssl.rpc.enabled=true \
+    --conf spark.authenticate=true \
+    --conf spark.network.crypto.enabled=true \
     --conf spark.security.oidc.enabled=true \
     --conf spark.security.oidc.identityToken.file=/etc/oidc/token \
     --conf spark.security.oidc.aws.roleArn=arn:aws:iam::123456789012:role/spark-user-access \

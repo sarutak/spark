@@ -1219,8 +1219,7 @@ delegation tokens rather than the original ticket-granting ticket.
   redacted from serialized (JSON) forms, so it is not written to logs.
 * Service credentials are not written to shuffle files, event logs, or checkpoints.
 * Credentials are carried over Spark's RPC channels and therefore rely on Spark's existing RPC
-  encryption configuration (`spark.ssl.*`). Enabling credential propagation without RPC encryption
-  configured logs a warning. Operators are strongly encouraged to enable RPC encryption whenever
+  encryption configuration. Operators are strongly encouraged to enable RPC encryption whenever
   credential propagation is enabled. See [Network Encryption](#network-encryption) for details.
 
 ## Custom CredentialProvider
@@ -1326,8 +1325,8 @@ properties consumed by the S3A connector.
 The reference provider is packaged in the `credential-aws` module, which is not part of the default
 Spark distribution (it is kept separate so that the AWS SDK is not added to the core classpath).
 
-The recommended way to make it available -- especially for cluster deployments such as Spark on
-Kubernetes -- is to build a custom Spark distribution or container image that includes the module,
+The recommended way to make it available (especially for cluster deployments such as Spark on
+Kubernetes) is to build a custom Spark distribution or container image that includes the module,
 using the `-Pcredential-aws` profile. Reading and writing S3 data additionally requires the S3A
 connector (`hadoop-aws`), provided by the `hadoop-cloud` module (the `-Phadoop-cloud` profile); the
 two modules are designed to be used together and pin the AWS SDK to the same version, so build with
@@ -1368,8 +1367,8 @@ spark.hadoop.fs.s3a.aws.credentials.provider org.apache.spark.security.aws.Spark
 
 If you set `fs.s3a.aws.credentials.provider` yourself, Spark does not override it.
 
-For complete, deployment-ready examples on Kubernetes -- including how to mount a projected
-ServiceAccount token (workload-level identity) or an externally-injected per-user identity token --
+For complete, deployment-ready examples on Kubernetes (including how to mount a projected
+ServiceAccount token for workload-level identity, or an externally-injected per-user identity token),
 see [OIDC Credential Propagation](running-on-kubernetes.html#oidc-credential-propagation) on the
 Kubernetes page.
 
@@ -1403,10 +1402,13 @@ only relevant when it is on the classpath and credential propagation is enabled.
 </tr>
 <tr>
   <td><code>spark.security.oidc.aws.sessionName</code></td>
-  <td><code>spark-oidc</code></td>
+  <td>(derived from the token principal)</td>
   <td>
     The role session name attached to the assumed-role session. It appears in CloudTrail records
-    and can be used for auditing. Must match <code>[a-zA-Z0-9_+=,.@-]{2,64}</code>.
+    and can be used for auditing. Must match <code>[a-zA-Z0-9_+=,.@-]{2,64}</code>. When unset, the
+    session name is derived from the identity token's principal (sanitized to satisfy the allowed
+    character set and length); if no usable principal is available, it falls back to
+    <code>spark-oidc</code>.
   </td>
   <td>4.4.0</td>
 </tr>
