@@ -68,7 +68,13 @@ private[spark] trait DepsTestsSuite { k8sSuite: KubernetesSuite =>
     ).asJava
 
     new ContainerBuilder()
-      .withImage("minio/minio:RELEASE.2025-09-07T16-13-09Z")
+      // The upstream `minio/minio` image is no longer distributed on Docker Hub after
+      // MinIO archived its community edition, so pods can no longer pull it and the K8s
+      // integration tests fail with "no running pod for service minio-s3 found". Use the
+      // community-maintained `pgsty/minio` fork, which keeps the `server /data` command,
+      // `MINIO_*` variables and S3 API compatible, and is published with pinned
+      // `RELEASE.*` multi-arch tags that anonymous pulls can resolve.
+      .withImage("pgsty/minio:RELEASE.2026-08-04T00-00-00Z")
       .withImagePullPolicy("IfNotPresent")
       .withName(cName)
       .withArgs("server", "/data")
