@@ -107,4 +107,17 @@ public class TransportConfSuite {
         "spark.m3.io.mode", "EPOLL")));
     assertEquals("EPOLL", c4.ioMode());
   }
+
+  @Test
+  public void testDefaultCipherTransformation() {
+    // When the cipher is not set explicitly, it must default to the authenticated
+    // AES/GCM/NoPadding mode (see CVE-2025-55039).
+    TransportConf c1 = new TransportConf("rpc", new MapConfigProvider(Map.of()));
+    assertEquals("AES/GCM/NoPadding", c1.cipherTransformation());
+
+    // An explicit setting must still be honored.
+    TransportConf c2 = new TransportConf("rpc",
+      new MapConfigProvider(Map.of("spark.network.crypto.cipher", "AES/CTR/NoPadding")));
+    assertEquals("AES/CTR/NoPadding", c2.cipherTransformation());
+  }
 }

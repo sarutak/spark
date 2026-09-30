@@ -213,10 +213,12 @@ The following table describes the different options available for configuring th
 </tr>
 <tr>
   <td><code>spark.network.crypto.cipher</code></td>
-  <td>AES/CTR/NoPadding</td>
+  <td>AES/GCM/NoPadding</td>
   <td>
-    Cipher mode to use. Defaults "AES/CTR/NoPadding" for backward compatibility, which is not authenticated. 
-    Recommended to use "AES/GCM/NoPadding", which is an authenticated encryption mode.
+    Cipher mode to use. Defaults to "AES/GCM/NoPadding", which is an authenticated encryption mode.
+    "AES/CTR/NoPadding" is also supported for backward compatibility, but it is not authenticated
+    and is not recommended. The default was changed from "AES/CTR/NoPadding" to "AES/GCM/NoPadding"
+    in Spark 5.0.0.
   </td>
   <td>4.0.0, 3.5.2, 3.4.4</td>
 </tr>

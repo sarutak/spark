@@ -224,9 +224,12 @@ public class TransportConf {
 
   /**
    * The cipher transformation to use for encrypting session data.
+   * The default is "AES/GCM/NoPadding", which is an authenticated encryption mode. Prior to
+   * Spark 5.0 the default was "AES/CTR/NoPadding", which is not authenticated and allows an
+   * on-path attacker to tamper with ciphertext undetected (CVE-2025-55039).
    */
   public String cipherTransformation() {
-    return conf.get("spark.network.crypto.cipher", "AES/CTR/NoPadding");
+    return conf.get("spark.network.crypto.cipher", "AES/GCM/NoPadding");
   }
 
   /**
