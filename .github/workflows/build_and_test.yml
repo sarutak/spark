@@ -997,6 +997,12 @@ jobs:
         done
         ls -la "$HOME/.sbt/boot" /root/.sbt/boot 2>&1
         ls build/*.jar 2>&1
+        echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+        for d in /.sbt /.sbt/boot /.cache /.cache/coursier; do
+          if [ -e "$d" ]; then echo "EXISTS $d ($(du -sh "$d" 2>/dev/null | cut -f1))"
+          else echo "MISSING $d"; fi
+        done
+        ls -la / /.sbt/boot 2>&1
         exit 0
     - name: List Python packages
       run: |
