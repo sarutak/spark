@@ -984,6 +984,7 @@ jobs:
     # TEMPORARY PROBE (do not merge): check whether the restored ~/.sbt and Coursier caches
     # are where the sbt launcher actually looks inside the container.
     - name: Probe sbt cache locations (before build)
+      continue-on-error: true
       run: |
         set +e
         echo "HOME=$HOME"; id; getent passwd "$(id -u)"
@@ -996,6 +997,7 @@ jobs:
         done
         ls -la "$HOME/.sbt/boot" /root/.sbt/boot 2>&1
         ls build/*.jar 2>&1
+        exit 0
     - name: List Python packages
       run: |
         lsb_release -a
@@ -1026,6 +1028,7 @@ jobs:
     # TEMPORARY PROBE (do not merge): see where the sbt launcher created its boot directory.
     - name: Probe sbt cache locations (after build)
       if: always()
+      continue-on-error: true
       run: |
         set +e
         for d in "$HOME/.sbt/boot" "$HOME/.cache/coursier" /root/.sbt/boot /root/.cache/coursier; do
@@ -1033,6 +1036,7 @@ jobs:
           else echo "MISSING $d"; fi
         done
         ls -la "$HOME/.sbt/boot" /root/.sbt/boot 2>&1
+        exit 0
     - name: Tar documentation
       if: github.repository != 'apache/spark'
       run: tar cjf site.tar.bz2 docs/_site
