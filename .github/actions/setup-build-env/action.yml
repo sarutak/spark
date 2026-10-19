@@ -114,6 +114,31 @@ runs:
         restore-keys: |
           maven-${{ runner.os }}-java${{ inputs.java-version }}-
 
+    # actions/cache stores '~' paths relative to the workspace. The caches above are saved by
+    # jobs on the host runner (workspace /home/runner/work/spark/spark, home /home/runner), so
+    # they are restored three levels above the workspace. Inside a job container (workspace
+    # /__w/spark/spark) that is '/', not $HOME. In the CI images the JVM's user.home (/root)
+    # also differs from $HOME (/github/home). Link the restored directories to where the sbt
+    # launcher and Coursier look, so container jobs do not download them again.
+    - name: Link restored caches into the JVM user home
+      shell: bash
+      run: |
+        restored_root="$(cd "$GITHUB_WORKSPACE/../../.." && pwd -P)"
+        jvm_home="$(getent passwd "$(id -u)" | cut -d: -f6)"
+        if [ -z "$jvm_home" ] || [ ! -d "$jvm_home" ] || \
+           [ "$restored_root" = "$(cd "$jvm_home" && pwd -P)" ]; then
+          exit 0
+        fi
+        for d in .sbt .cache/coursier; do
+          src="$restored_root/$d"
+          dst="$jvm_home/$d"
+          if [ -d "$src" ] && [ ! -e "$dst" ]; then
+            mkdir -p "$(dirname "$dst")"
+            ln -s "$src" "$dst"
+            echo "Linked $dst -> $src"
+          fi
+        done
+
     - name: Free up disk space
       if: inputs.free-disk-space == 'host'
       continue-on-error: true
