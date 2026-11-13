@@ -946,7 +946,8 @@ class FilterPushdownSuite extends PlanTest {
     comparePlans(Optimize.execute(throwingFirstChain), throwingFirstChainAnswer)
   }
 
-  test("SPARK-60731: a Python UDF shared with a throwable alias read later runs in both layers") {
+  test("SPARK-60731: a throwable alias sharing a Python UDF with an earlier condition's alias " +
+    "is not computed below that condition's filter") {
     val pythonUDF = PythonUDF(
       "pythonUDF", null, IntegerType, Seq($"a"), PythonEvalType.SQL_BATCHED_UDF,
       udfDeterministic = true)
@@ -956,12 +957,14 @@ class FilterPushdownSuite extends PlanTest {
       .where($"f" && $"t" && $"j")
       .analyze
 
-    // t is not computed with f, so the UDF the two share runs in the layer of f and again in the
-    // layer of t. Running it only once is the subject of SPARK-61515.
-    val udfProjects = Optimize.execute(originalQuery).collect {
-      case p: Project if p.projectList.exists(_.exists(_.isInstanceOf[PythonUDF])) => p
+    // t is not computed with f, below the filter on f.
+    val optimized = Optimize.execute(originalQuery)
+    val fFilter = optimized.collectFirst {
+      case filter @ Filter(condition, _) if condition.references.exists(_.name == "f") &&
+        !condition.references.exists(_.name == "t") => filter
     }
-    assert(udfProjects.size === 2)
+    assert(fFilter.isDefined, optimized)
+    assert(!fFilter.get.child.output.exists(_.name == "t"), optimized)
   }
 
   test("SPARK-60731: a throwable alias sharing work with the aliases a condition reads does not " +
@@ -1359,22 +1362,22 @@ class FilterPushdownSuite extends PlanTest {
   }
 
   // The conjuncts of every filter of `plan`, from the top, in their order, which `comparePlans`
-  // does not check. Unlike `assertTopFilterConjuncts`, it covers every filter, and normalizes the
-  // expression IDs, so it can compare two plans built separately. It compares the conjuncts as
-  // written, operands included. It does not canonicalize them: with every expression ID
-  // normalized, canonicalized attributes of the same type are equal, so `a > 1` would match
-  // `b > 1`.
+  // does not check. It normalizes the expression IDs, so it can compare two plans built
+  // separately, and compares the conjuncts as written, operands included. It does not
+  // canonicalize them: with every expression ID normalized, canonicalized attributes of the same
+  // type are equal, so `a > 1` would match `b > 1`.
   private def filterConjuncts(plan: LogicalPlan): Seq[Seq[Expression]] =
     normalizeExprIds(plan).collect {
       case Filter(condition, _) => splitConjunctivePredicates(condition)
     }
 
-  // `comparePlans` sorts the conjuncts of each filter, so check the top filter's order directly.
+  // Checks the conjuncts of the top filter of `plan` against `expected`, in their order, as
+  // `filterConjuncts` compares them.
   private def assertTopFilterConjuncts(plan: LogicalPlan, expected: Seq[Expression]): Unit = {
-    val actual = plan.collectFirst { case Filter(condition, _) => condition }
-      .map(splitConjunctivePredicates).getOrElse(Nil)
-    assert(actual.map(_.canonicalized) === expected.map(_.canonicalized),
-      s"Top filter conjuncts ${actual.mkString(", ")} are not ${expected.mkString(", ")}")
+    val actual = filterConjuncts(plan).headOption.getOrElse(Nil)
+    val expectedConjuncts = filterConjuncts(Filter(expected.reduce(And), LocalRelation())).head
+    assert(actual === expectedConjuncts,
+      s"Top filter conjuncts ${actual.mkString(", ")} are not ${expectedConjuncts.mkString(", ")}")
   }
 
   test("SPARK-60602: the conditions left above the projection keep their written order") {

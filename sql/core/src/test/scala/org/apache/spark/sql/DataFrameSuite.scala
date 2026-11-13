@@ -3030,14 +3030,22 @@ class DataFrameSuite extends SharedSparkSession
     val k = udf((i: Long) => i)
     def df: DataFrame = spark.range(0, 100, 1, 1)
       .select($"id", f($"id") as "f", h($"id") as "h", k($"id") as "k")
-    def randQueries: Seq[DataFrame] = Seq(
-      df.where((rand(10) > 0.5 || $"h" < 0) && $"f" >= 50),
-      df.where($"f" >= 20 && $"h" >= 40 && (rand(10) > 0.5 || $"f" < 0) && $"k" >= 0),
-      df.where($"f" >= 20 && $"h" >= 40 && (rand(10) > 0.5 || $"f" < 0) && $"f" % 3 =!= 0 &&
+    def randQueriesOver(input: DataFrame): Seq[DataFrame] = Seq(
+      input.where((rand(10) > 0.5 || $"h" < 0) && $"f" >= 50),
+      input.where($"f" >= 20 && $"h" >= 40 && (rand(10) > 0.5 || $"f" < 0) && $"k" >= 0),
+      input.where($"f" >= 20 && $"h" >= 40 && (rand(10) > 0.5 || $"f" < 0) && $"f" % 3 =!= 0 &&
         $"k" >= 0),
-      df.where($"f" >= 20 && (rand(10) > 0.5 || $"h" < 0) && $"f" % 3 =!= 0 && $"k" >= 0),
-      df.where($"f" >= 20 && $"h" + $"k" >= 60 && (rand(10) > 0.5 || $"f" < 0)),
-      df.where($"f" >= 20 && (rand(10) > 0.5 || $"h" + $"k" < 0) && $"f" % 3 =!= 0))
+      input.where($"f" >= 20 && (rand(10) > 0.5 || $"h" < 0) && $"f" % 3 =!= 0 && $"k" >= 0),
+      input.where($"f" >= 20 && $"h" + $"k" >= 60 && (rand(10) > 0.5 || $"f" < 0)),
+      input.where($"f" >= 20 && (rand(10) > 0.5 || $"h" + $"k" < 0) && $"f" % 3 =!= 0))
+    def randQueries: Seq[DataFrame] = randQueriesOver(df)
+    // The same with UDF results that can be null, for which the optimizer adds `isnotnull`
+    // checks in front of the filter (`InferFiltersFromConstraints`).
+    val nullableF = udf((i: Long) => if (i % 7 == 3) null else java.lang.Long.valueOf(i))
+    val nullableH = udf((i: Long) => if (i % 5 == 1) null else java.lang.Long.valueOf(i))
+    val nullableK = udf((i: Long) => if (i % 4 == 2) null else java.lang.Long.valueOf(i))
+    def nullableQueries: Seq[DataFrame] = randQueriesOver(spark.range(0, 100, 1, 1)
+      .select($"id", nullableF($"id") as "f", nullableH($"id") as "h", nullableK($"id") as "k"))
     def udfProjects(q: DataFrame): Seq[Project] = q.queryExecution.optimizedPlan.collect {
       case p: Project if p.projectList.exists(_.exists(_.isInstanceOf[ScalaUDF])) => p
     }
@@ -3056,6 +3064,24 @@ class DataFrameSuite extends SharedSparkSession
       }
       assert(split === unsplit)
     }
+    // With whole-stage codegen, the filter evaluates an `isnotnull` check just before the first
+    // condition reading its column, so the split-off plan evaluates the conditions in written
+    // order; without codegen it evaluates the checks first. So the split, with or without
+    // codegen, returns the rows of the split-off plan with codegen.
+    def nullableRows(split: Boolean, codegen: Boolean): Seq[Seq[Row]] = withSQLConf(
+        SQLConf.SPLIT_PROJECTION_FOR_EXPENSIVE_FILTERS.key -> split.toString,
+        SQLConf.WHOLESTAGE_CODEGEN_ENABLED.key -> codegen.toString) {
+      nullableQueries.map { q =>
+        if (split) {
+          assert(udfProjects(q).size > 1, "The split did not apply:\n" +
+            q.queryExecution.optimizedPlan)
+        }
+        q.collect().toSeq
+      }
+    }
+    val nullableUnsplit = nullableRows(split = false, codegen = true)
+    assert(nullableRows(split = true, codegen = true) === nullableUnsplit)
+    assert(nullableRows(split = true, codegen = false) === nullableUnsplit)
   }
 
   test("SPARK-60731: a throwable alias sharing work with an earlier condition's alias is " +
@@ -3081,8 +3107,8 @@ class DataFrameSuite extends SharedSparkSession
         if (codegen || split) {
           assert(query(readsT).collect().toSeq === (6L until 10L).map(i => Row(i, true, true)))
           // With the split, gt5 runs for f on every row and again for t on the rows f keeps,
-          // also with codegen. Computing it only once is the subject of SPARK-61515.
-          if (split) assert(gt5Calls.value === 14)
+          // also with codegen. SPARK-61515 is to run it only once, which lowers the count.
+          if (split) assert(gt5Calls.value <= 14)
         } else {
           checkError(
             exception = intercept[SparkRuntimeException](query(readsT).collect()),
