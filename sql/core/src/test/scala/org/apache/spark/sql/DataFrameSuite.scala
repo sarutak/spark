@@ -51,6 +51,7 @@ import org.apache.spark.sql.types._
 import org.apache.spark.tags.SlowSQLTest
 import org.apache.spark.unsafe.types.CalendarInterval
 import org.apache.spark.util.ArrayImplicits._
+import org.apache.spark.util.random.XORShiftRandom
 
 @SlowSQLTest
 class DataFrameSuite extends SharedSparkSession
@@ -3030,22 +3031,14 @@ class DataFrameSuite extends SharedSparkSession
     val k = udf((i: Long) => i)
     def df: DataFrame = spark.range(0, 100, 1, 1)
       .select($"id", f($"id") as "f", h($"id") as "h", k($"id") as "k")
-    def randQueriesOver(input: DataFrame): Seq[DataFrame] = Seq(
-      input.where((rand(10) > 0.5 || $"h" < 0) && $"f" >= 50),
-      input.where($"f" >= 20 && $"h" >= 40 && (rand(10) > 0.5 || $"f" < 0) && $"k" >= 0),
-      input.where($"f" >= 20 && $"h" >= 40 && (rand(10) > 0.5 || $"f" < 0) && $"f" % 3 =!= 0 &&
+    def randQueries: Seq[DataFrame] = Seq(
+      df.where((rand(10) > 0.5 || $"h" < 0) && $"f" >= 50),
+      df.where($"f" >= 20 && $"h" >= 40 && (rand(10) > 0.5 || $"f" < 0) && $"k" >= 0),
+      df.where($"f" >= 20 && $"h" >= 40 && (rand(10) > 0.5 || $"f" < 0) && $"f" % 3 =!= 0 &&
         $"k" >= 0),
-      input.where($"f" >= 20 && (rand(10) > 0.5 || $"h" < 0) && $"f" % 3 =!= 0 && $"k" >= 0),
-      input.where($"f" >= 20 && $"h" + $"k" >= 60 && (rand(10) > 0.5 || $"f" < 0)),
-      input.where($"f" >= 20 && (rand(10) > 0.5 || $"h" + $"k" < 0) && $"f" % 3 =!= 0))
-    def randQueries: Seq[DataFrame] = randQueriesOver(df)
-    // The same with UDF results that can be null, for which the optimizer adds `isnotnull`
-    // checks in front of the filter (`InferFiltersFromConstraints`).
-    val nullableF = udf((i: Long) => if (i % 7 == 3) null else java.lang.Long.valueOf(i))
-    val nullableH = udf((i: Long) => if (i % 5 == 1) null else java.lang.Long.valueOf(i))
-    val nullableK = udf((i: Long) => if (i % 4 == 2) null else java.lang.Long.valueOf(i))
-    def nullableQueries: Seq[DataFrame] = randQueriesOver(spark.range(0, 100, 1, 1)
-      .select($"id", nullableF($"id") as "f", nullableH($"id") as "h", nullableK($"id") as "k"))
+      df.where($"f" >= 20 && (rand(10) > 0.5 || $"h" < 0) && $"f" % 3 =!= 0 && $"k" >= 0),
+      df.where($"f" >= 20 && $"h" + $"k" >= 60 && (rand(10) > 0.5 || $"f" < 0)),
+      df.where($"f" >= 20 && (rand(10) > 0.5 || $"h" + $"k" < 0) && $"f" % 3 =!= 0))
     def udfProjects(q: DataFrame): Seq[Project] = q.queryExecution.optimizedPlan.collect {
       case p: Project if p.projectList.exists(_.exists(_.isInstanceOf[ScalaUDF])) => p
     }
@@ -3064,24 +3057,41 @@ class DataFrameSuite extends SharedSparkSession
       }
       assert(split === unsplit)
     }
-    // With whole-stage codegen, the filter evaluates an `isnotnull` check just before the first
-    // condition reading its column, so the split-off plan evaluates the conditions in written
-    // order; without codegen it evaluates the checks first. So the split, with or without
-    // codegen, returns the rows of the split-off plan with codegen.
-    def nullableRows(split: Boolean, codegen: Boolean): Seq[Seq[Row]] = withSQLConf(
-        SQLConf.SPLIT_PROJECTION_FOR_EXPENSIVE_FILTERS.key -> split.toString,
+
+    // With UDF results that can be null, the optimizer adds `isnotnull` checks for the columns
+    // of the later conditions (`InferFiltersFromConstraints`), which the split-off plan can
+    // evaluate ahead of the non-deterministic condition: without codegen ahead of all the
+    // conditions, with codegen just before the first condition reading the column, here the
+    // non-deterministic one in the second query. The split keeps the written order, so, with
+    // and without codegen, it returns the rows that evaluating the conditions as written gives:
+    // `rand(10)` advances once for every row, and the condition holds where it is above 0.5.
+    val nullableF = udf((i: Long) => if (i % 7 == 3) null else java.lang.Long.valueOf(i))
+    val nullableH = udf((i: Long) => if (i % 5 == 1) null else java.lang.Long.valueOf(i))
+    def nullableDf: DataFrame = spark.range(0, 100, 1, 1)
+      .select($"id", nullableF($"id") as "f", nullableH($"id") as "h")
+    def nullableQueries: Seq[DataFrame] = Seq(
+      nullableDf.where((rand(10) > 0.5 || $"h" < 0) && $"f" >= 50),
+      nullableDf.where((rand(10) > 0.5 || $"f" < 0) && $"h" >= 50 && $"f" >= 50))
+    val randAbove = {
+      val random = new XORShiftRandom(10)
+      (0 until 100).map(_ => random.nextDouble() > 0.5)
+    }
+    def fAtLeast50(i: Int): Boolean = i % 7 != 3 && i >= 50
+    def hAtLeast50(i: Int): Boolean = i % 5 != 1 && i >= 50
+    val writtenOrderIds = Seq(
+      (0 until 100).filter(i => randAbove(i) && fAtLeast50(i)),
+      (0 until 100).filter(i => randAbove(i) && hAtLeast50(i) && fAtLeast50(i)))
+    for (codegen <- Seq(true, false)) {
+      withSQLConf(
+        SQLConf.SPLIT_PROJECTION_FOR_EXPENSIVE_FILTERS.key -> "true",
         SQLConf.WHOLESTAGE_CODEGEN_ENABLED.key -> codegen.toString) {
-      nullableQueries.map { q =>
-        if (split) {
+        nullableQueries.zip(writtenOrderIds).foreach { case (q, ids) =>
           assert(udfProjects(q).size > 1, "The split did not apply:\n" +
             q.queryExecution.optimizedPlan)
+          assert(q.collect().map(_.getLong(0)).toSeq === ids.map(_.toLong), s"codegen=$codegen")
         }
-        q.collect().toSeq
       }
     }
-    val nullableUnsplit = nullableRows(split = false, codegen = true)
-    assert(nullableRows(split = true, codegen = true) === nullableUnsplit)
-    assert(nullableRows(split = true, codegen = false) === nullableUnsplit)
   }
 
   test("SPARK-60731: a throwable alias sharing work with an earlier condition's alias is " +
@@ -3107,8 +3117,9 @@ class DataFrameSuite extends SharedSparkSession
         if (codegen || split) {
           assert(query(readsT).collect().toSeq === (6L until 10L).map(i => Row(i, true, true)))
           // With the split, gt5 runs for f on every row and again for t on the rows f keeps,
-          // also with codegen. SPARK-61515 is to run it only once, which lowers the count.
-          if (split) assert(gt5Calls.value <= 14)
+          // also with codegen. SPARK-61515 is to run it only once per row, which lowers the count
+          // to 10.
+          if (split) assert(gt5Calls.value >= 10 && gt5Calls.value <= 14)
         } else {
           checkError(
             exception = intercept[SparkRuntimeException](query(readsT).collect()),

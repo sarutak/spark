@@ -947,7 +947,7 @@ class FilterPushdownSuite extends PlanTest {
   }
 
   test("SPARK-60731: a throwable alias sharing a Python UDF with an earlier condition's alias " +
-    "is not computed below that condition's filter") {
+    "is computed with it") {
     val pythonUDF = PythonUDF(
       "pythonUDF", null, IntegerType, Seq($"a"), PythonEvalType.SQL_BATCHED_UDF,
       udfDeterministic = true)
@@ -957,14 +957,15 @@ class FilterPushdownSuite extends PlanTest {
       .where($"f" && $"t" && $"j")
       .analyze
 
-    // t is not computed with f, below the filter on f.
+    // Unlike a throwable alias sharing other work, t is computed with f, so the Python UDF runs
+    // in one projection only.
     val optimized = Optimize.execute(originalQuery)
-    val fFilter = optimized.collectFirst {
-      case filter @ Filter(condition, _) if condition.references.exists(_.name == "f") &&
-        !condition.references.exists(_.name == "t") => filter
+    val udfProjects = optimized.collect {
+      case p: Project if p.projectList.exists(_.exists(_.isInstanceOf[PythonUDF])) => p
     }
-    assert(fFilter.isDefined, optimized)
-    assert(!fFilter.get.child.output.exists(_.name == "t"), optimized)
+    assert(udfProjects.size === 1, optimized)
+    assert(udfProjects.head.projectList.collect { case a: Alias => a.name }.toSet ===
+      Set("f", "t"), optimized)
   }
 
   test("SPARK-60731: a throwable alias sharing work with the aliases a condition reads does not " +
@@ -1362,8 +1363,8 @@ class FilterPushdownSuite extends PlanTest {
   }
 
   // The conjuncts of every filter of `plan`, from the top, in their order, which `comparePlans`
-  // does not check. It normalizes the expression IDs, so it can compare two plans built
-  // separately, and compares the conjuncts as written, operands included. It does not
+  // does not check. It normalizes the expression IDs, so the conjuncts of two plans built
+  // separately can be compared, as written, operands included. It does not
   // canonicalize them: with every expression ID normalized, canonicalized attributes of the same
   // type are equal, so `a > 1` would match `b > 1`.
   private def filterConjuncts(plan: LogicalPlan): Seq[Seq[Expression]] =
@@ -1371,8 +1372,8 @@ class FilterPushdownSuite extends PlanTest {
       case Filter(condition, _) => splitConjunctivePredicates(condition)
     }
 
-  // Checks the conjuncts of the top filter of `plan` against `expected`, in their order, as
-  // `filterConjuncts` compares them.
+  // Checks the conjuncts of the top filter of `plan` against the non-empty `expected`, in their
+  // order, normalized as `filterConjuncts` does.
   private def assertTopFilterConjuncts(plan: LogicalPlan, expected: Seq[Expression]): Unit = {
     val actual = filterConjuncts(plan).headOption.getOrElse(Nil)
     val expectedConjuncts = filterConjuncts(Filter(expected.reduce(And), LocalRelation())).head
