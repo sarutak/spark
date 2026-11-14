@@ -958,7 +958,7 @@ class FilterPushdownSuite extends PlanTest {
       .analyze
 
     // Unlike a throwable alias sharing other work, t is computed with f, so the Python UDF runs
-    // in one projection only.
+    // in one projection only. SPARK-61515 would remove this exception; update this test there.
     val optimized = Optimize.execute(originalQuery)
     val udfProjects = optimized.collect {
       case p: Project if p.projectList.exists(_.exists(_.isInstanceOf[PythonUDF])) => p
@@ -966,6 +966,43 @@ class FilterPushdownSuite extends PlanTest {
     assert(udfProjects.size === 1, optimized)
     assert(udfProjects.head.projectList.collect { case a: Alias => a.name }.toSet ===
       Set("f", "t"), optimized)
+  }
+
+  // The aliases each projection of `plan` with an expensive alias computes, from the bottom.
+  private def layerAliases(plan: LogicalPlan): Seq[Set[String]] = plan.collect {
+    case p: Project => p.projectList.collect { case a: Alias => a.name }.toSet
+  }.filter(_.nonEmpty).reverse
+
+  test("SPARK-60731: the Python UDF exception for a throwable alias follows shared work " +
+    "through other aliases, decides where the split ends, and needs a shared Python UDF") {
+    val pythonUDF = PythonUDF(
+      "pythonUDF", null, IntegerType, Seq($"a"), PythonEvalType.SQL_BATCHED_UDF,
+      udfDeterministic = true)
+    val raiseError = IsNull(RaiseError(Literal("boom")))
+    // f shares a regex with h, which shares the Python UDF with the throwable t, so t is computed
+    // with f and h.
+    val throughAlias = testStringRelation
+      .select($"a", expensiveRLike("magic") as "f",
+        (expensiveRLike("magic") && pythonUDF > 0) as "h",
+        If(pythonUDF > 0, Literal(true), raiseError) as "t", expensiveRLike("third") as "j")
+      .where($"f" && $"t" && $"j")
+      .analyze
+    assert(layerAliases(Optimize.execute(throughAlias)).head === Set("f", "h", "t"))
+    // With f and the throwable t sharing the Python UDF as the only expensive aliases, the
+    // condition on f needs t too, so it ends the split and nothing is split off.
+    val onlyFAndT = testStringRelation
+      .select($"a", (pythonUDF > 0) as "f", If(pythonUDF > 0, Literal(true), raiseError) as "t")
+      .where($"f")
+      .analyze
+    assert(layerAliases(Optimize.execute(onlyFAndT)) === Seq(Set("f", "t")))
+    // t has a Python UDF of its own but shares only a regex with f, so it is not computed with f.
+    val sharesOnlyRegex = testStringRelation
+      .select($"a", expensiveRLike("magic") as "f",
+        If(expensiveRLike("magic"), pythonUDF > 0, raiseError) as "t",
+        expensiveRLike("third") as "j")
+      .where($"f" && $"t" && $"j")
+      .analyze
+    assert(layerAliases(Optimize.execute(sharesOnlyRegex)).head === Set("f"))
   }
 
   test("SPARK-60731: a throwable alias sharing work with the aliases a condition reads does not " +

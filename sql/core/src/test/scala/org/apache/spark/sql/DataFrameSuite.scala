@@ -51,7 +51,6 @@ import org.apache.spark.sql.types._
 import org.apache.spark.tags.SlowSQLTest
 import org.apache.spark.unsafe.types.CalendarInterval
 import org.apache.spark.util.ArrayImplicits._
-import org.apache.spark.util.random.XORShiftRandom
 
 @SlowSQLTest
 class DataFrameSuite extends SharedSparkSession
@@ -3062,9 +3061,11 @@ class DataFrameSuite extends SharedSparkSession
     // of the later conditions (`InferFiltersFromConstraints`), which the split-off plan can
     // evaluate ahead of the non-deterministic condition: without codegen ahead of all the
     // conditions, with codegen just before the first condition reading the column, here the
-    // non-deterministic one in the second query. The split keeps the written order, so, with
-    // and without codegen, it returns the rows that evaluating the conditions as written gives:
-    // `rand(10)` advances once for every row, and the condition holds where it is above 0.5.
+    // non-deterministic one in the second query. The split, which places these conditions before
+    // the checks are inferred, keeps the non-deterministic condition ahead of the conditions
+    // written after it, so, with and without codegen, it returns the rows that evaluating the
+    // conditions as written gives: `rand(10)` sees every row, and the first condition holds
+    // where it is above 0.5.
     val nullableF = udf((i: Long) => if (i % 7 == 3) null else java.lang.Long.valueOf(i))
     val nullableH = udf((i: Long) => if (i % 5 == 1) null else java.lang.Long.valueOf(i))
     def nullableDf: DataFrame = spark.range(0, 100, 1, 1)
@@ -3072,10 +3073,7 @@ class DataFrameSuite extends SharedSparkSession
     def nullableQueries: Seq[DataFrame] = Seq(
       nullableDf.where((rand(10) > 0.5 || $"h" < 0) && $"f" >= 50),
       nullableDf.where((rand(10) > 0.5 || $"f" < 0) && $"h" >= 50 && $"f" >= 50))
-    val randAbove = {
-      val random = new XORShiftRandom(10)
-      (0 until 100).map(_ => random.nextDouble() > 0.5)
-    }
+    val randAbove = spark.range(0, 100, 1, 1).select(rand(10) > 0.5).collect().map(_.getBoolean(0))
     def fAtLeast50(i: Int): Boolean = i % 7 != 3 && i >= 50
     def hAtLeast50(i: Int): Boolean = i % 5 != 1 && i >= 50
     val writtenOrderIds = Seq(
@@ -3119,7 +3117,9 @@ class DataFrameSuite extends SharedSparkSession
           // With the split, gt5 runs for f on every row and again for t on the rows f keeps,
           // also with codegen. SPARK-61515 is to run it only once per row, which lowers the count
           // to 10.
-          if (split) assert(gt5Calls.value >= 10 && gt5Calls.value <= 14)
+          if (split) {
+            assert((10L to 14L).contains(gt5Calls.value), s"gt5 ran ${gt5Calls.value} times")
+          }
         } else {
           checkError(
             exception = intercept[SparkRuntimeException](query(readsT).collect()),
