@@ -32,7 +32,7 @@ import org.apache.spark.api.python.PythonEvalType
 import org.apache.spark.sql.catalyst.{InternalRow, TableIdentifier}
 import org.apache.spark.sql.catalyst.analysis.MultiInstanceRelation
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
-import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, Cast, EqualTo, ExpressionSet, GreaterThan, Literal, PythonUDF, ScalarSubquery, ScalaUDF}
+import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference, Cast, EqualTo, ExpressionSet, GreaterThan, Literal, PythonUDF, RLike, ScalarSubquery, ScalaUDF}
 import org.apache.spark.sql.catalyst.optimizer.ConvertToLocalRelation
 import org.apache.spark.sql.catalyst.parser.ParseException
 import org.apache.spark.sql.catalyst.plans.logical.{Filter, LeafNode, LocalRelation, LogicalPlan, OneRowRelation, Project}
@@ -3137,12 +3137,29 @@ class DataFrameSuite extends SharedSparkSession
 
   test("SPARK-60731: a condition that cannot fail written after the one that ends the split is " +
     "evaluated before it") {
-    // `g + j >= 0` needs every expensive alias not computed yet, so it ends the split, but
-    // `j >= 80`, which cannot fail, is still filtered on below it, so g only runs on the 20 rows
-    // it keeps. In the second query, `u(j)`, a UDF that may fail, takes its place and stays above
-    // `g + j >= 0`, so g runs on the 50 rows `f >= 50` keeps. In the third, `j >= 80` is not
-    // filtered on below `g + j >= 0` either, as a later pass would then push `u(j)`, which would
-    // only read the `j` computed below, ahead of it.
+    // With regex aliases, which cannot fail and version 0 of the estimate treats as expensive,
+    // `g != j` needs every expensive alias not computed yet, so it ends the split, but `j` is
+    // still filtered on below it: the split computes f, then j, then g, in three projections,
+    // and returns the rows of the split off.
+    def regexDf: DataFrame = spark.range(0, 100, 1, 1)
+      .select($"id", $"id".cast("string") as "s")
+      .select($"id", $"s".rlike("^[5-9]") as "f", $"s".rlike("^9") as "g",
+        $"s".rlike("^[89]") as "j")
+      .where($"f" && $"g" =!= $"j" && $"j")
+    def regexProjects(q: DataFrame): Int = q.queryExecution.optimizedPlan.collect {
+      case p: Project if p.projectList.exists(_.exists(_.isInstanceOf[RLike])) => p
+    }.size
+    withSQLConf(SQLConf.REGEX_PATTERN_COST_ESTIMATE_VERSION.key -> "0") {
+      val unsplit = withSQLConf(SQLConf.SPLIT_PROJECTION_FOR_EXPENSIVE_FILTERS.key -> "false") {
+        regexDf.collect().toSeq
+      }
+      assert(unsplit.map(_.getLong(0)) === 8L +: (80L to 89L))
+      assert(regexProjects(regexDf) === 3, regexDf.queryExecution.optimizedPlan)
+      assert(regexDf.collect().toSeq === unsplit)
+    }
+
+    // With UDF aliases, which can fail, nothing is filtered on below `g + j >= 0`, so g runs on
+    // the 50 rows `f >= 50` keeps, not only on the 20 that `j >= 80` keeps.
     val gCalls = sparkContext.longAccumulator("gCalls")
     val f = udf((i: Long) => i)
     val g = udf((i: Long) => {
@@ -3150,22 +3167,17 @@ class DataFrameSuite extends SharedSparkSession
       i
     })
     val j = udf((i: Long) => i)
-    val u = udf((i: Long) => i >= 80)
-    def df: DataFrame = spark.range(0, 100, 1, 1)
-      .select($"id", f($"id") as "f", g($"id") as "g", j($"id") as "j")
-    val expected = (80L until 100L).map(i => Row(i, i, i, i))
-    Seq[(Column, Long)](($"j" >= 80, 20L), (u($"j"), 50L), ($"j" >= 80 && u($"j"), 50L)).foreach {
-      case (after, calls) =>
-        withSQLConf(
-          SQLConf.WHOLESTAGE_CODEGEN_ENABLED.key -> "false",
-          SQLConf.SPLIT_PROJECTION_FOR_EXPENSIVE_FILTERS.key -> "true") {
-          gCalls.reset()
-          val q = df.where($"f" >= 50 && $"g" + $"j" >= 0 && after)
-          assert(q.collect().toSeq === expected)
-          assert(gCalls.value === calls, s"after: $after")
-        }
+    withSQLConf(
+      SQLConf.WHOLESTAGE_CODEGEN_ENABLED.key -> "false",
+      SQLConf.SPLIT_PROJECTION_FOR_EXPENSIVE_FILTERS.key -> "true") {
+      val q = spark.range(0, 100, 1, 1)
+        .select($"id", f($"id") as "f", g($"id") as "g", j($"id") as "j")
+        .where($"f" >= 50 && $"g" + $"j" >= 0 && $"j" >= 80)
+      assert(q.collect().toSeq === (80L until 100L).map(i => Row(i, i, i, i)))
+      assert(gCalls.value === 50)
     }
   }
+
 
   test("SPARK-60633: a throwable filter condition is not pushed through an operator ahead of " +
     "its order") {

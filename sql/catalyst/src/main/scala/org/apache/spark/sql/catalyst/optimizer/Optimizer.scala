@@ -17,8 +17,11 @@
 
 package org.apache.spark.sql.catalyst.optimizer
 
+import java.util.regex.Pattern
+
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
+import scala.util.Try
 
 import org.apache.spark.SparkException
 import org.apache.spark.internal.{LogKeys}
@@ -42,6 +45,7 @@ import org.apache.spark.sql.errors.QueryCompilationErrors
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.util.SchemaUtils._
+import org.apache.spark.unsafe.types.UTF8String
 import org.apache.spark.util.Utils
 
 /**
@@ -3091,32 +3095,26 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
    * aliases, `f` is computed and filtered on first, and `t` above it.
    *
    * Before a deterministic condition ends the split, the conditions written after it, up to the
-   * first non-deterministic one, that `ExprUtils.canEvaluateUnconditionally` accepts (over the
-   * aliases, so a condition reading a throwable alias can be one) and that read no alias not
-   * computed yet that the condition ending the split does not read, are filtered on in a layer
-   * below it, in their written order (in a second one, for a condition that only becomes acceptable
-   * once the first one computes its aliases). That layer computes the aliases they need, and is
-   * only added while it still leaves an expensive alias for a later one, none of the aliases it
-   * leaves shares expensive work with one it computes, which would then run twice, it computes no
-   * throwable alias that the condition ending the split does not read, which an operator outside
-   * whole-stage codegen above it, such as a Python evaluation, would compute on the rows that
-   * condition drops, and no condition after the one ending the split, up to the first
-   * non-deterministic one, would then read an expensive alias this layer computes and none computed
-   * on top while it can fail and is not throwable over the aliases left on top, as a later pass
-   * would then push it ahead of the condition ending the split; a condition that would break one of
-   * these stays above. For example, with only `f` and `g` expensive and sharing no work,
-   * `f != g AND f` computes `f` and filters on `f` below `f != g`, which stays above the
-   * projection. The condition that ends the split reads the aliases not computed yet that these
-   * conditions read, so the projection on top would compute them on the same rows, also with
-   * whole-stage codegen. An alias they only share expensive work with is computed with them, as in
-   * the earlier layers (see above). A condition that cannot fail only drops rows, so moving it
-   * ahead of the conditions before it, which may fail, only lets fewer rows reach them. Later
-   * passes split each layer the same way, so in a layer's filter a condition that cannot fail can
-   * likewise be filtered on below the first one, when that one needs every expensive alias the
-   * layer computes: with `j` expensive too, `f != g AND j AND f` filters on `f`, then on `f != g`,
-   * then on `j`. Among the conditions that cannot fail, the split does not otherwise order by cost:
-   * in this example, and in `(f || g) AND j`, it computes `f` and `g` on more rows than filtering
-   * on `j` first would (SPARK-61680).
+   * first non-deterministic one, are filtered on in a layer below it, in their written order, when
+   * nothing there can fail: none of these conditions can fail over the aliases not computed yet,
+   * which a later pass inlines into a condition it pushes (`cannotFail`, which also accepts LIKE
+   * and RLIKE with a literal pattern that compiles), and no alias the layer computes can fail. A
+   * second such layer can follow when the first computes the aliases another condition needs. The
+   * layer is also only added while it still leaves an expensive alias for a later one and none of
+   * the aliases it leaves shares expensive work with one it computes, which would then run twice; a
+   * condition that would break this stays above. So the layer only drops rows earlier. It can
+   * compute an alias on rows that a later rewrite of the condition ending the split, or a check
+   * inferred for it, would have dropped first, which costs time but cannot fail. For example, with
+   * `f` and `g` the only expensive aliases, LIKE or RLIKE with a literal pattern under version 0 of
+   * the regex pattern cost estimate, `f != g AND f` computes `f` and filters on `f` below `f != g`,
+   * which stays above the projection. The check is conservative: with an alias that can fail, such
+   * as a UDF, or a condition after the one ending the split that can, nothing is filtered on below
+   * it. Later passes split each layer the same way, so in a layer's filter a condition that cannot
+   * fail can likewise be filtered on below the first one, when that one needs every expensive alias
+   * the layer computes: with `j` expensive too, `f != g AND j AND f` filters on `f`, then on
+   * `f != g`, then on `j`. Among the conditions that cannot fail, the split does not otherwise
+   * order by cost: in this example, and in `(f || g) AND j`, it computes `f` and `g` on more rows
+   * than filtering on `j` first would (SPARK-61680).
    *
    * Returns the new plan, the alias attributes it has already computed, and the un-placed
    * conditions (in their original, alias-referencing form and written order).
@@ -3181,61 +3179,44 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
     // Projection order is stable, unlike the alias map's iteration order.
     val orderedAliases = project.projectList.collect { case a: Alias => a }
 
-    // Each condition with the aliases it needs and the aliases it reads.
-    var pending: Seq[(AttributeSet, Expression, AttributeSet)] = expensiveConds.map {
-      case (cond, used) => (unitOf(AttributeSet(used.keys)), cond, AttributeSet(used.keys))
+    var pending: Seq[(AttributeSet, Expression)] = expensiveConds.map {
+      case (cond, used) => (unitOf(AttributeSet(used.keys)), cond)
     }
     var plan = baseChild
     var computed = AttributeSet.empty
     var searching = true
     while (searching && pending.nonEmpty) {
-      val (needed, head, _) = pending.head
+      val (needed, head) = pending.head
       val remaining = expensiveAliases -- computed
       // The aliases the next layer needs, the conditions of its filter, and the rest.
       val nextLayer = if (!remaining.subsetOf(needed)) {
         // The next condition and, when it is deterministic, the deterministic ones right after it
         // that only need aliases computed already.
-        val (inFilter, rest) = nextFilter(pending)(_._2.deterministic, {
-          case (condNeeded, _, _) => condNeeded.subsetOf(computed ++ needed)
-        })
+        val (inFilter, rest) = nextFilter(pending)(
+          _._2.deterministic, { case (condNeeded, _) => condNeeded.subsetOf(computed ++ needed) })
         Some((needed, inFilter, rest))
       } else if (head.deterministic) {
-        // The head ends the split, but first the conditions after it that cannot fail get a layer
-        // of their own (see the docstring).
+        // The head ends the split, but first the conditions after it get a layer of their own,
+        // when none of them, nor any alias that layer computes, can fail (see the docstring).
         val conds = pending.toIndexedSeq
         val following = conds.indices.tail.takeWhile(idx => conds(idx)._2.deterministic)
-        val cannotFail =
-          following.map(idx => idx -> ExprUtils.canEvaluateUnconditionally(conds(idx)._2)).toMap
-        def aliasesRead(idx: Int): AttributeSet = conds(idx)._3 -- computed
-        // Whether the condition can fail and a later pass would push it below the projection on
-        // top, ahead of the head, once the layer computes `grown`: it would then read an expensive
-        // alias the layer computes and none computed on top. Like that pass, this judges the
-        // condition over the aliases left on top (`onTop`), which it inlines, cheap ones included.
-        def exposed(idx: Int, grown: AttributeSet, onTop: AttributeMap[Alias]): Boolean = {
-          val expensiveRead = aliasesRead(idx).filter(expensiveAliases.contains)
-          expensiveRead.nonEmpty && expensiveRead.subsetOf(grown) && {
-            val inlined = replaceAlias(conds(idx)._2, onTop)
-            !ExprUtils.canEvaluateUnconditionally(inlined) && !inlined.throwable
-          }
-        }
-        val (deferred, deferredNeeded) = following
-          .filter(idx => cannotFail(idx) && aliasesRead(idx).subsetOf(head.references))
+        // Over the aliases not computed yet, which a later pass inlines into a condition it
+        // pushes once the projection on top computes them.
+        val notComputed = AttributeMap(aliasMap.toSeq.filterNot { case (attr, _) =>
+          computed.contains(attr)
+        })
+        val followingCannotFail =
+          following.forall(idx => cannotFail(replaceAlias(conds(idx)._2, notComputed)))
+        val (deferred, deferredNeeded) = (if (followingCannotFail) following else Nil)
           .foldLeft((Set.empty[Int], AttributeSet.empty)) { case ((taken, unit), idx) =>
             val grown = unit ++ conds(idx)._1
+            val newAliases = grown -- computed
             val left = remaining -- grown
-            val onTop = AttributeMap(aliasMap.toSeq.filterNot {
-              case (attr, _) => computed.contains(attr) || grown.contains(attr)
-            })
             // Only while the layer still leaves an expensive alias for a later one, no alias it
-            // leaves shares expensive work with one it computes (also through a throwable alias,
-            // unlike the units), it computes no throwable alias the head does not read (which an
-            // operator outside whole-stage codegen above it, such as a Python evaluation, would
-            // compute on the rows the head drops), and no condition left after the head is
-            // exposed.
-            if (left.nonEmpty && (partsOf(left) intersect partsOf(grown -- computed)).isEmpty &&
-                (grown -- computed).filter(a => aliasMap(a).child.throwable)
-                  .subsetOf(head.references) &&
-                !following.exists(exposed(_, grown, onTop))) {
+            // leaves shares expensive work with one it computes, and no alias it computes, also
+            // one that only shares expensive work with an alias a condition reads, can fail.
+            if (left.nonEmpty && (partsOf(left) intersect partsOf(newAliases)).isEmpty &&
+                newAliases.forall(attr => cannotFail(aliasMap(attr).child))) {
               (taken + idx, grown)
             } else {
               (taken, unit)
@@ -3288,6 +3269,24 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
     } else {
       (conds.take(1), conds.tail)
     }
+  }
+
+  /**
+   * Whether `e` cannot fail: `ExprUtils.canEvaluateUnconditionally`, also accepting LIKE and
+   * RLIKE with a literal pattern that compiles, which version 0 of the regex pattern cost
+   * estimate treats as expensive (SPARK-60731).
+   */
+  private def cannotFail(e: Expression): Boolean = e match {
+    case r: StringRegexExpression => literalPatternCompiles(r) && cannotFail(r.left)
+    case _ if e.children.isEmpty => ExprUtils.canEvaluateUnconditionally(e)
+    case _ => e.deterministic && ExprUtils.isTotalOperator(e) && e.children.forall(cannotFail)
+  }
+
+  private def literalPatternCompiles(r: StringRegexExpression): Boolean = r.right match {
+    case Literal(null, _) => true
+    case Literal(pattern: UTF8String, _) =>
+      Try(Pattern.compile(r.escape(pattern.toString), r.collationRegexFlags)).isSuccess
+    case _ => false
   }
 
   /**

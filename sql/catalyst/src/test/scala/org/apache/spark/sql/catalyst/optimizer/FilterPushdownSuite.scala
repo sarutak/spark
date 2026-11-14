@@ -76,6 +76,10 @@ class FilterPushdownSuite extends PlanTest {
   // for every row.
   private def expensiveRLike(tag: String): Expression = $"e".rlike(Concat(Seq($"e", Literal(tag))))
 
+  // An RLIKE with a literal pattern, which cannot fail; version 0 of the regex pattern cost
+  // estimate treats it as expensive.
+  private def literalRLike(pattern: String): Expression = $"e".rlike(pattern)
+
   // This test already passes.
   test("eliminate subqueries") {
     val originalQuery =
@@ -786,8 +790,8 @@ class FilterPushdownSuite extends PlanTest {
     // (g != j) needs g and j, so the split ends there. The conditions left above share one
     // filter, as they are deterministic, also when one is throwable; a later pass does not push
     // the throwable one below (g != j), even in the last case, where it only reads the f
-    // computed below. Each can fail, so it is not filtered on below (g != j) (see the next test
-    // for the ones that cannot fail).
+    // computed below. Each can fail, and so can the regexes here, whose patterns are not
+    // literals, so it is not filtered on below (g != j) (see the next tests).
     Seq[Expression]($"j" || raiseError, $"f" || raiseError).foreach { after =>
       val originalQuery = testStringRelation
         .select($"a", expensiveRLike("magic") as "f", expensiveRLike("other") as "g",
@@ -808,307 +812,203 @@ class FilterPushdownSuite extends PlanTest {
 
   test("SPARK-60731: the conditions after the one that ends the split that cannot fail are " +
     "filtered on below it") {
-    val raiseError = IsNull(RaiseError(Literal("boom")))
-    def query(cond: Expression): LogicalPlan = testStringRelation
-      .select($"a", expensiveRLike("magic") as "f", expensiveRLike("other") as "g",
-        expensiveRLike("third") as "j")
-      .where(cond)
-      .analyze
-    def check(cond: Expression, correctAnswer: LogicalPlan): Unit = {
-      val optimized = Optimize.execute(query(cond))
-      comparePlans(optimized, correctAnswer.analyze)
-      assert(filterConjuncts(optimized) === filterConjuncts(correctAnswer.analyze))
-    }
-
-    // `f AND g != j AND j` (example 3 of the review): (g != j) ends the split, and j is
-    // filtered on below it. A condition after j that can fail stays above, in its written
-    // position.
-    Seq(Seq.empty[Expression], Seq($"j" || raiseError)).foreach { after =>
-      check((Seq($"f", Not($"g" === $"j"), $"j") ++ after).reduce(And),
-        testStringRelation
-          .select($"a", $"b", $"e", expensiveRLike("magic") as "f")
-          .where($"f")
-          .select($"a", $"b", $"e", $"f", expensiveRLike("third") as "j")
-          .where($"j")
-          .select($"a", $"f", expensiveRLike("other") as "g", $"j")
-          .where((Not($"g" === $"j") +: after).reduce(And)))
-    }
-    // `f != g AND j AND f`: (f != g) does not need every expensive alias, so it does not end the
-    // split, and the split places the conditions in their written order, although filtering on j
-    // first would compute f and g on fewer rows (SPARK-61680 would change this plan). j ends the
-    // split, and f, which cannot fail, gets a filter of its own below it, which `CombineFilters`
-    // merges into the filter of (f != g). In the layer computing f and g, (f != g) then needs
-    // every expensive alias, so a later pass filters on f below it.
-    check(Not($"f" === $"g") && $"j" && $"f",
-      testStringRelation
-        .select($"a", $"b", $"e", expensiveRLike("magic") as "f")
-        .where($"f")
-        .select($"a", $"b", $"e", $"f", expensiveRLike("other") as "g")
-        .where(Not($"f" === $"g"))
-        .select($"a", $"f", $"g", expensiveRLike("third") as "j")
-        .where($"j"))
-    // A condition that can fail, here over no alias, is skipped, and the one after it that cannot
-    // fail is still filtered on below (g != j), ahead of it.
-    check($"f" && Not($"g" === $"j") && ($"a" > 1 || raiseError) && $"j",
-      testStringRelation
-        .select($"a", $"b", $"e", expensiveRLike("magic") as "f")
-        .where($"f")
-        .select($"a", $"b", $"e", $"f", expensiveRLike("third") as "j")
-        .where($"j")
-        .select($"a", $"f", expensiveRLike("other") as "g", $"j")
-        .where(Not($"g" === $"j") && ($"a" > 1 || raiseError)))
-    // Several such conditions share the layer's filter in their written order, also one that
-    // reads an alias computed in an earlier layer, which (g != j) does not need.
-    check($"f" && Not($"g" === $"j") && $"j" && (Not($"j") || $"f"),
-      testStringRelation
-        .select($"a", $"b", $"e", expensiveRLike("magic") as "f")
-        .where($"f")
-        .select($"a", $"b", $"e", $"f", expensiveRLike("third") as "j")
-        .where($"j" && (Not($"j") || $"f"))
-        .select($"a", $"f", expensiveRLike("other") as "g", $"j")
-        .where(Not($"g" === $"j")))
-    // One application of the rule places both, as later passes would otherwise push the one
-    // reading f into that filter anyway.
-    val twoQuery = query($"f" && Not($"g" === $"j") && $"j" && (Not($"j") || $"f"))
-    val twoOnce = PushPredicateThroughNonJoin(twoQuery)
-    val twoOnceAnswer = testStringRelation
-      .select($"a", $"b", $"e", expensiveRLike("magic") as "f")
-      .where($"f")
-      .select($"a", $"b", $"e", $"f", expensiveRLike("third") as "j")
-      .where($"j" && (Not($"j") || $"f"))
-      .select($"a", $"f", expensiveRLike("other") as "g", $"j")
-      .where(Not($"g" === $"j"))
-      .analyze
-    comparePlans(twoOnce, twoOnceAnswer)
-    assert(filterConjuncts(twoOnce) === filterConjuncts(twoOnceAnswer))
-    // A condition over a throwable alias that the condition ending the split reads is filtered
-    // on below it: the alias is computed on the same rows as on top.
-    val throwing = If(expensiveRLike("third"), Literal(true), raiseError)
-    val throwingQuery = testStringRelation
-      .select($"a", expensiveRLike("magic") as "f", expensiveRLike("other") as "g",
-        throwing as "t")
-      .where($"f" && Not($"g" === $"t") && $"t")
-      .analyze
-    comparePlans(Optimize.execute(throwingQuery),
-      testStringRelation
-        .select($"a", $"b", $"e", expensiveRLike("magic") as "f")
-        .where($"f")
-        .select($"a", $"b", $"e", $"f", throwing as "t")
-        .where($"t")
-        .select($"a", $"f", expensiveRLike("other") as "g", $"t")
-        .where(Not($"g" === $"t"))
-        .analyze)
-    // A condition calling a UDF, which may fail, is not filtered on below (g != j). Nor is j when
-    // the UDF condition only reads j, written before or after j: with j computed below, a later
-    // pass would push the UDF condition ahead of (g != j).
-    val udf = ScalaUDF((s: Boolean) => s, BooleanType, Seq($"j"), Seq(None),
-      udfDeterministic = true)
-    Seq(Seq(udf), Seq($"j", udf), Seq(udf, $"j")).foreach { after =>
-      val cond = (Seq($"f", Not($"g" === $"j")) ++ after).reduce(And)
-      val optimized = Optimize.execute(query(cond))
-      val correctAnswer = testStringRelation
-        .select($"a", $"b", $"e", expensiveRLike("magic") as "f")
-        .where($"f")
-        .select($"a", $"f", expensiveRLike("other") as "g", expensiveRLike("third") as "j")
-        .where((Not($"g" === $"j") +: after).reduce(And))
+    // RLIKE with a literal pattern cannot fail, and version 0 of the estimate treats it as
+    // expensive.
+    withSQLConf(SQLConf.REGEX_PATTERN_COST_ESTIMATE_VERSION.key -> "0") {
+      val (f, g, j) = (literalRLike("^1"), literalRLike("^2"), literalRLike("^3"))
+      def query(cond: Expression): LogicalPlan = testStringRelation
+        .select($"a", f as "f", g as "g", j as "j")
+        .where(cond)
         .analyze
-      comparePlans(optimized, correctAnswer)
-      assert(filterConjuncts(optimized) === filterConjuncts(correctAnswer))
+      def check(optimized: LogicalPlan, correctAnswer: LogicalPlan): Unit = {
+        comparePlans(optimized, correctAnswer.analyze)
+        assert(filterConjuncts(optimized) === filterConjuncts(correctAnswer.analyze))
+      }
+
+      // `f AND g != j AND j` (example 3 of the review): (g != j) ends the split, and j is
+      // filtered on below it.
+      check(Optimize.execute(query($"f" && Not($"g" === $"j") && $"j")),
+        testStringRelation
+          .select($"a", $"b", $"e", f as "f")
+          .where($"f")
+          .select($"a", $"b", $"e", $"f", j as "j")
+          .where($"j")
+          .select($"a", $"f", g as "g", $"j")
+          .where(Not($"g" === $"j")))
+      // Several such conditions share the layer's filter in their written order, also one that
+      // reads an alias computed in an earlier layer, which (g != j) does not need; one
+      // application of the rule places both, as later passes would otherwise push the one
+      // reading f into that filter anyway.
+      val twoAnswer = testStringRelation
+        .select($"a", $"b", $"e", f as "f")
+        .where($"f")
+        .select($"a", $"b", $"e", $"f", j as "j")
+        .where($"j" && (Not($"j") || $"f"))
+        .select($"a", $"f", g as "g", $"j")
+        .where(Not($"g" === $"j"))
+      val two = query($"f" && Not($"g" === $"j") && $"j" && (Not($"j") || $"f"))
+      check(Optimize.execute(two), twoAnswer)
+      check(PushPredicateThroughNonJoin(two), twoAnswer)
+      // `f != g AND j AND f`: (f != g) does not need every expensive alias, so it does not end
+      // the split, and the split places the conditions in their written order, although filtering
+      // on j first would compute f and g on fewer rows (SPARK-61680 would change this plan). j
+      // ends the split, and f, which cannot fail, gets a filter of its own below it, which
+      // `CombineFilters` merges into the filter of (f != g). In the layer computing f and g,
+      // (f != g) then needs every expensive alias, so a later pass filters on f below it.
+      check(Optimize.execute(query(Not($"f" === $"g") && $"j" && $"f")),
+        testStringRelation
+          .select($"a", $"b", $"e", f as "f")
+          .where($"f")
+          .select($"a", $"b", $"e", $"f", g as "g")
+          .where(Not($"f" === $"g"))
+          .select($"a", $"f", $"g", j as "j")
+          .where($"j"))
+
+      val twoAliases = testStringRelation.select($"a", f as "f", g as "g")
+      // `f != g AND f` (example 2 of the review): f is filtered on below (f != g).
+      check(Optimize.execute(twoAliases.where(Not($"f" === $"g") && $"f").analyze),
+        testStringRelation
+          .select($"a", $"b", $"e", f as "f")
+          .where($"f")
+          .select($"a", $"f", g as "g")
+          .where(Not($"f" === $"g")))
+      // `f != g AND f AND g`: f is filtered on below (f != g), but g, which would leave no
+      // expensive alias for a later layer, stays above, and so does (f OR g) in
+      // `f != g AND (f OR g) AND f`, while f after it is still filtered on below.
+      // A non-deterministic condition after f does not keep f from being filtered on below
+      // (f != g), and gets a filter of its own above it.
+      check(Optimize.execute(
+        twoAliases.where(Not($"f" === $"g") && $"f" && (Rand(10) > 0.5 || $"g")).analyze),
+        testStringRelation
+          .select($"a", $"b", $"e", f as "f")
+          .where($"f")
+          .select($"a", $"f", g as "g")
+          .where(Not($"f" === $"g"))
+          .where(Rand(10) > 0.5 || $"g"))
+      // The work an alias left shares with an alias computed in an earlier layer does not keep a
+      // condition from being filtered on below the one that ends the split, in one application of
+      // the rule: the throwable t shares f's regex but is not computed with it, and (j OR f) is
+      // filtered on below (g = j OR t) although t is left.
+      val throwingF = If(f, Literal(true), IsNull(RaiseError(Literal("boom"))))
+      check(PushPredicateThroughNonJoin(testStringRelation
+          .select($"a", f as "f", throwingF as "t", g as "g", j as "j")
+          .where($"f" && ($"g" === $"j" || $"t") && ($"j" || $"f"))
+          .analyze),
+        testStringRelation
+          .select($"a", $"b", $"e", f as "f")
+          .where($"f")
+          .select($"a", $"b", $"e", $"f", j as "j")
+          .where($"j" || $"f")
+          .select($"a", $"f", throwingF as "t", g as "g", $"j")
+          .where($"g" === $"j" || $"t"))
+      Seq[(Expression, Expression)](
+        (Not($"f" === $"g") && $"f" && $"g", $"g"),
+        (Not($"f" === $"g") && ($"f" || $"g") && $"f", $"f" || $"g")).foreach {
+        case (cond, other) =>
+        check(Optimize.execute(twoAliases.where(cond).analyze),
+          testStringRelation
+            .select($"a", $"b", $"e", f as "f")
+            .where($"f")
+            .select($"a", $"f", g as "g")
+            .where(Not($"f" === $"g") && other))
+      }
     }
-    // A UDF condition that also reads an alias the layer does not compute does not keep j from
-    // being filtered on below (g != j).
-    val udfOverG = ScalaUDF((s: Boolean, t: Boolean) => s && t, BooleanType, Seq($"g", $"j"),
-      Seq(None, None), udfDeterministic = true)
-    check($"f" && Not($"g" === $"j") && $"j" && udfOverG,
-      testStringRelation
-        .select($"a", $"b", $"e", expensiveRLike("magic") as "f")
-        .where($"f")
-        .select($"a", $"b", $"e", $"f", expensiveRLike("third") as "j")
-        .where($"j")
-        .select($"a", $"f", expensiveRLike("other") as "g", $"j")
-        .where(Not($"g" === $"j") && udfOverG))
-    // Nor is j filtered on below (g != j) when the UDF condition also reads a cheap alias, which
-    // a later pass would inline when pushing it.
-    val udfOverJAndC = ScalaUDF((s: Boolean, c: Int) => s, BooleanType, Seq($"j", $"c"),
-      Seq(None, None), udfDeterministic = true)
-    val cheapQuery = testStringRelation
-      .select($"a", ($"a" + 1) as "c", expensiveRLike("magic") as "f",
-        expensiveRLike("other") as "g", expensiveRLike("third") as "j")
-      .where($"f" && Not($"g" === $"j") && $"j" && udfOverJAndC)
-      .analyze
-    val cheapOnce = PushPredicateThroughNonJoin(cheapQuery)
-    val cheapAnswer = testStringRelation
-      .select($"a", $"b", $"e", expensiveRLike("magic") as "f")
-      .where($"f")
-      .select($"a", ($"a" + 1) as "c", $"f", expensiveRLike("other") as "g",
-        expensiveRLike("third") as "j")
-      .where(Not($"g" === $"j") && $"j" && udfOverJAndC)
-      .analyze
-    comparePlans(cheapOnce, cheapAnswer)
-    assert(filterConjuncts(cheapOnce) === filterConjuncts(cheapAnswer))
-    // Nor when the UDF condition reads a throwable alias that the layer computes: the condition
-    // is throwable over the alias, but not over the attribute a later pass sees.
-    val udfOverT = ScalaUDF((s: Boolean) => s, BooleanType, Seq($"t"), Seq(None),
-      udfDeterministic = true)
-    val udfOverTQuery = testStringRelation
-      .select($"a", expensiveRLike("magic") as "f", expensiveRLike("other") as "g",
-        throwing as "t")
-      .where($"f" && Not($"g" === $"t") && $"t" && udfOverT)
-      .analyze
-    val udfOverTOptimized = Optimize.execute(udfOverTQuery)
-    val udfOverTAnswer = testStringRelation
-      .select($"a", $"b", $"e", expensiveRLike("magic") as "f")
-      .where($"f")
-      .select($"a", $"f", expensiveRLike("other") as "g", throwing as "t")
-      .where(Not($"g" === $"t") && $"t" && udfOverT)
-      .analyze
-    comparePlans(udfOverTOptimized, udfOverTAnswer)
-    assert(filterConjuncts(udfOverTOptimized) === filterConjuncts(udfOverTAnswer))
-    // Nor when a condition after it can fail through a cheap alias, which a later pass inlines:
-    // with j computed below, it would push (c > 5 OR NOT j) ahead of (g != j), and the ANSI cast
-    // of c can fail.
-    val ansiCast = Cast($"e", IntegerType, evalMode = EvalMode.ANSI)
-    val castQuery = testStringRelation
-      .select($"a", ansiCast as "c", expensiveRLike("magic") as "f",
-        expensiveRLike("other") as "g", expensiveRLike("third") as "j")
-      .where($"f" && Not($"g" === $"j") && ($"j" || $"f") && ($"c" > 5 || Not($"j")))
-      .analyze
-    val castOptimized = Optimize.execute(castQuery)
-    val castAnswer = testStringRelation
-      .select($"a", $"b", $"e", expensiveRLike("magic") as "f")
-      .where($"f")
-      .select($"a", ansiCast as "c", $"f", expensiveRLike("other") as "g",
-        expensiveRLike("third") as "j")
-      .where(Not($"g" === $"j") && ($"j" || $"f") && ($"c" > 5 || Not($"j")))
-      .analyze
-    comparePlans(castOptimized, castAnswer)
-    assert(filterConjuncts(castOptimized) === filterConjuncts(castAnswer))
-    // Nor does a UDF condition that only reads an alias computed in an earlier layer, which later
-    // passes push below the projection on top whether or not j is filtered on below (g != j)
-    // (SPARK-60730), so one application of the rule is checked.
-    val udfOverF = ScalaUDF((s: Boolean) => s, BooleanType, Seq($"f"), Seq(None),
-      udfDeterministic = true)
-    val udfOverFOnce =
-      PushPredicateThroughNonJoin(query($"f" && Not($"g" === $"j") && $"j" && udfOverF))
-    val udfOverFAnswer = testStringRelation
-      .select($"a", $"b", $"e", expensiveRLike("magic") as "f")
-      .where($"f")
-      .select($"a", $"b", $"e", $"f", expensiveRLike("third") as "j")
-      .where($"j")
-      .select($"a", $"f", expensiveRLike("other") as "g", $"j")
-      .where(Not($"g" === $"j") && udfOverF)
-      .analyze
-    comparePlans(udfOverFOnce, udfOverFAnswer)
-    assert(filterConjuncts(udfOverFOnce) === filterConjuncts(udfOverFAnswer))
-    // A condition reading an alias that the condition ending the split does not read, and only
-    // needs through shared work, is not filtered on below it: t shares a Python UDF with x, so
-    // (x != g) needs t, but does not read it, so whole-stage codegen does not compute t on the
-    // rows (x != g) drops.
-    val pythonUDF = PythonUDF(
-      "pythonUDF", null, IntegerType, Seq($"a"), PythonEvalType.SQL_BATCHED_UDF,
-      udfDeterministic = true)
-    val pythonThrowing = If(pythonUDF > 0, Literal(true), raiseError)
-    val sharedQuery = testStringRelation
-      .select($"a", (pythonUDF > 0) as "x", pythonThrowing as "t", expensiveRLike("other") as "g")
-      .where(Not($"x" === $"g") && $"t")
-      .analyze
-    comparePlans(Optimize.execute(sharedQuery), sharedQuery)
-    // Nor is x, which (x != g) reads, filtered on below it: its layer would compute t, which
-    // shares the Python UDF with x and which (x != g) does not read, and an operator outside
-    // whole-stage codegen above that layer would compute t on the rows (x != g) drops.
-    val sharedPythonQuery = testStringRelation
-      .select($"a", (pythonUDF > 0) as "x", pythonThrowing as "t", expensiveRLike("other") as "g")
-      .where(Not($"x" === $"g") && $"x")
-      .analyze
-    comparePlans(Optimize.execute(sharedPythonQuery), sharedPythonQuery)
-    // Nor is a condition over an alias that the condition ending the split only needs through
-    // shared work: h shares f's regex, so (f != g) needs h without reading it, and whole-stage
-    // codegen would not compute h, whose UDF may fail, on the rows (f != g) drops.
-    val udfOverMagic = ScalaUDF((s: Boolean) => s, BooleanType, Seq(expensiveRLike("magic")),
-      Seq(None), udfDeterministic = true)
-    val sharedUdfQuery = testStringRelation
-      .select($"a", expensiveRLike("magic") as "f", udfOverMagic as "h",
-        expensiveRLike("other") as "g")
-      .where(Not($"f" === $"g") && $"h")
-      .analyze
-    comparePlans(Optimize.execute(sharedUdfQuery), sharedUdfQuery)
-    // The work an alias left shares with an alias computed in an earlier layer does not keep a
-    // condition from being filtered on below the one that ends the split, in one application of
-    // the rule: t shares f's regex but is not computed with it, and (j OR f) is filtered on below
-    // (g = j OR t) although t is left.
-    val throwingMagic = If(expensiveRLike("magic"), Literal(true), raiseError)
-    val computedShared = testStringRelation
-      .select($"a", expensiveRLike("magic") as "f", throwingMagic as "t",
-        expensiveRLike("other") as "g", expensiveRLike("third") as "j")
-      .where($"f" && ($"g" === $"j" || $"t") && ($"j" || $"f"))
-      .analyze
-    comparePlans(PushPredicateThroughNonJoin(computedShared),
-      testStringRelation
-        .select($"a", $"b", $"e", expensiveRLike("magic") as "f")
-        .where($"f")
-        .select($"a", $"b", $"e", $"f", expensiveRLike("third") as "j")
-        .where($"j" || $"f")
-        .select($"a", $"f", throwingMagic as "t", expensiveRLike("other") as "g", $"j")
-        .where($"g" === $"j" || $"t")
-        .analyze)
   }
 
   test("SPARK-60731: the conditions after the one that ends the split are not filtered on below " +
-    "it past a non-deterministic condition or when they would leave nothing to defer or split " +
-    "shared work") {
+    "it when something there can fail, past a non-deterministic condition, or when they would " +
+    "leave nothing to defer or split shared work") {
     val raiseError = IsNull(RaiseError(Literal("boom")))
-    val twoAliases = testStringRelation
-      .select($"a", expensiveRLike("magic") as "f", expensiveRLike("other") as "g")
-    // `f != g AND f` (example 2 of the review): f is filtered on below (f != g).
-    val fFirst = Optimize.execute(twoAliases.where(Not($"f" === $"g") && $"f").analyze)
-    comparePlans(fFirst,
-      testStringRelation
-        .select($"a", $"b", $"e", expensiveRLike("magic") as "f")
-        .where($"f")
-        .select($"a", $"f", expensiveRLike("other") as "g")
-        .where(Not($"f" === $"g"))
-        .analyze)
-    // `f != g AND f AND g`: f is filtered on below (f != g), but g, which would leave no
-    // expensive alias for a later layer, stays above.
-    val both = Optimize.execute(twoAliases.where(Not($"f" === $"g") && $"f" && $"g").analyze)
-    val bothAnswer = testStringRelation
-      .select($"a", $"b", $"e", expensiveRLike("magic") as "f")
-      .where($"f")
-      .select($"a", $"f", expensiveRLike("other") as "g")
-      .where(Not($"f" === $"g") && $"g")
-      .analyze
-    comparePlans(both, bothAnswer)
-    assert(filterConjuncts(both) === filterConjuncts(bothAnswer))
-    // `f != g AND (f OR g) AND f`: (f OR g) would leave no expensive alias for a later layer and
-    // stays above, but f after it is still filtered on below (f != g).
-    val skipped = Optimize.execute(
-      twoAliases.where(Not($"f" === $"g") && ($"f" || $"g") && $"f").analyze)
-    val skippedAnswer = testStringRelation
-      .select($"a", $"b", $"e", expensiveRLike("magic") as "f")
-      .where($"f")
-      .select($"a", $"f", expensiveRLike("other") as "g")
-      .where(Not($"f" === $"g") && ($"f" || $"g"))
-      .analyze
-    comparePlans(skipped, skippedAnswer)
-    assert(filterConjuncts(skipped) === filterConjuncts(skippedAnswer))
-    // Nothing is filtered on below a non-deterministic condition that ends the split, nor past a
-    // non-deterministic condition written after the one that ends it, and a condition that can
-    // fail is not filtered on below it either.
-    Seq[Expression](
-      (Rand(10) > 0.5 || Not($"f" === $"g")) && $"f",
-      Not($"f" === $"g") && (Rand(10) > 0.5 || $"g") && $"f",
-      Not($"f" === $"g") && ($"f" || raiseError)).foreach { cond =>
-      val originalQuery = twoAliases.where(cond).analyze
-      comparePlans(Optimize.execute(originalQuery), originalQuery)
+    withSQLConf(SQLConf.REGEX_PATTERN_COST_ESTIMATE_VERSION.key -> "0") {
+      val (f, g, j) = (literalRLike("^1"), literalRLike("^2"), literalRLike("^3"))
+      val udfOverJ = ScalaUDF((s: Boolean) => s, BooleanType, Seq($"j"), Seq(None),
+        udfDeterministic = true)
+      val udfOverG = ScalaUDF((s: Boolean) => s, BooleanType, Seq($"g"), Seq(None),
+        udfDeterministic = true)
+      val threeAliases = Seq(f as "f", g as "g", j as "j")
+      // A condition after the one that ends the split that can fail, whether or not it reads the
+      // aliases the layer would compute: a throwable one, a UDF over j, which a later pass would
+      // push ahead of (g != j) once j is computed below, a UDF over g, and a condition over the
+      // ANSI cast of a cheap alias, which that pass would inline.
+      val ansiCast = Cast($"e", IntegerType, evalMode = EvalMode.ANSI)
+      Seq[Expression]($"j" || raiseError, $"a" > 1 || raiseError, udfOverJ, udfOverG)
+        .foreach { after =>
+          val cond = $"f" && Not($"g" === $"j") && $"j" && after
+          val originalQuery = testStringRelation.select($"a" +: threeAliases: _*).where(cond)
+            .analyze
+          comparePlans(Optimize.execute(originalQuery),
+            testStringRelation
+              .select($"a", $"b", $"e", f as "f")
+              .where($"f")
+              .select($"a", $"f", g as "g", j as "j")
+              .where(Not($"g" === $"j") && $"j" && after)
+              .analyze)
+        }
+      val castQuery = testStringRelation
+        .select($"a", ansiCast as "c", f as "f", g as "g", j as "j")
+        .where($"f" && Not($"g" === $"j") && $"j" && ($"c" > 5 || Not($"j")))
+        .analyze
+      comparePlans(Optimize.execute(castQuery),
+        testStringRelation
+          .select($"a", $"b", $"e", f as "f")
+          .where($"f")
+          .select($"a", ansiCast as "c", $"f", g as "g", j as "j")
+          .where(Not($"g" === $"j") && $"j" && ($"c" > 5 || Not($"j")))
+          .analyze)
+      // An alias the layer would compute that can fail: a regex whose pattern is not a literal,
+      // or does not compile, or whose input can fail, a UDF, also under an operator that cannot
+      // fail, and a throwable alias.
+      val udfJ = ScalaUDF((s: String) => s.isEmpty, BooleanType, Seq($"e"), Seq(None),
+        udfDeterministic = true)
+      val udfString = ScalaUDF((s: String) => s, StringType, Seq($"e"), Seq(None),
+        udfDeterministic = true)
+      Seq(expensiveRLike("third"), $"e".rlike("["), udfString.rlike("^3"), udfJ, Not(udfJ),
+        If(literalRLike("^3"), Literal(true), raiseError)).foreach { failingJ =>
+        val originalQuery = testStringRelation
+          .select($"a", f as "f", g as "g", failingJ as "j")
+          .where($"f" && Not($"g" === $"j") && $"j")
+          .analyze
+        comparePlans(Optimize.execute(originalQuery),
+          testStringRelation
+            .select($"a", $"b", $"e", f as "f")
+            .where($"f")
+            .select($"a", $"f", g as "g", failingJ as "j")
+            .where(Not($"g" === $"j") && $"j")
+            .analyze)
+      }
+      // Nor when the layer would also compute an alias that can fail and that no condition
+      // reads, as it shares the regex of j: h calls a UDF over it.
+      val udfOverRegex = ScalaUDF((s: Boolean) => s, BooleanType, Seq(j), Seq(None),
+        udfDeterministic = true)
+      val pulledInQuery = testStringRelation
+        .select($"a", f as "f", g as "g", j as "j", udfOverRegex as "h")
+        .where($"f" && Not($"g" === $"j") && $"j")
+        .analyze
+      comparePlans(Optimize.execute(pulledInQuery),
+        testStringRelation
+          .select($"a", $"b", $"e", f as "f")
+          .where($"f")
+          .select($"a", $"f", g as "g", j as "j", udfOverRegex as "h")
+          .where(Not($"g" === $"j") && $"j")
+          .analyze)
+      // Nothing is filtered on below a non-deterministic condition that ends the split, nor past
+      // a non-deterministic condition written after the one that ends it.
+      val twoAliases = testStringRelation.select($"a", f as "f", g as "g")
+      Seq[Expression](
+        (Rand(10) > 0.5 || Not($"f" === $"g")) && $"f",
+        Not($"f" === $"g") && (Rand(10) > 0.5 || $"g") && $"f").foreach { cond =>
+        val originalQuery = twoAliases.where(cond).analyze
+        comparePlans(Optimize.execute(originalQuery), originalQuery)
+      }
+      // Nor when the layer would leave an alias that shares expensive work with one it computes:
+      // the throwable t shares f's regex, which would then run in the layer of f and again on
+      // top.
+      val sharingQuery = testStringRelation
+        .select($"a", f as "f", If(f, Literal(true), raiseError) as "t")
+        .where(Not($"f" === $"t") && $"f")
+        .analyze
+      comparePlans(Optimize.execute(sharingQuery), sharingQuery)
     }
-    // Nor when the layer would leave an alias that shares expensive work with one it computes:
-    // the throwable t shares f's regex, which would then run in the layer of f and again on top.
-    val sharingQuery = testStringRelation
-      .select($"a", expensiveRLike("magic") as "f",
-        If(expensiveRLike("magic"), Literal(true), raiseError) as "t")
-      .where(Not($"f" === $"t") && $"f")
-      .analyze
-    comparePlans(Optimize.execute(sharingQuery), sharingQuery)
   }
 
   test("SPARK-60731: a layer that needs no new alias is a filter alone") {
