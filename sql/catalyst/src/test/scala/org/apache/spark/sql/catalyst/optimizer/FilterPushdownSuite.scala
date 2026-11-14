@@ -786,7 +786,7 @@ class FilterPushdownSuite extends PlanTest {
     // (g != j) needs g and j, so the split ends there. The conditions left above share one
     // filter, as they are deterministic, also when one is throwable; a later pass does not push
     // the throwable one below (g != j), even in the last case, where it only reads the f
-    // computed below. Both can fail, so neither is filtered on below (g != j) (see the next test
+    // computed below. Each can fail, so it is not filtered on below (g != j) (see the next test
     // for the ones that cannot fail).
     Seq[Expression]($"j" || raiseError, $"f" || raiseError).foreach { after =>
       val originalQuery = testStringRelation
@@ -834,10 +834,11 @@ class FilterPushdownSuite extends PlanTest {
           .where((Not($"g" === $"j") +: after).reduce(And)))
     }
     // `f != g AND j AND f`: (f != g) does not need every expensive alias, so it does not end the
-    // split, and the split places the conditions in their written order, f joining the filter of
-    // (f != g), although filtering on j first would compute f and g on fewer rows (SPARK-61680
-    // would change this plan). In the layer computing f and g, (f != g) then needs every
-    // expensive alias, so a later pass filters on f below it.
+    // split, and the split places the conditions in their written order, although filtering on j
+    // first would compute f and g on fewer rows (SPARK-61680 would change this plan). j ends the
+    // split, and f, which cannot fail, gets a filter of its own below it, which `CombineFilters`
+    // merges into the filter of (f != g). In the layer computing f and g, (f != g) then needs
+    // every expensive alias, so a later pass filters on f below it.
     check(Not($"f" === $"g") && $"j" && $"f",
       testStringRelation
         .select($"a", $"b", $"e", expensiveRLike("magic") as "f")
@@ -898,11 +899,11 @@ class FilterPushdownSuite extends PlanTest {
         .where(Not($"g" === $"t"))
         .analyze)
     // A condition calling a UDF, which may fail, is not filtered on below (g != j). Nor is j when
-    // the UDF condition only reads j: with j computed below, a later pass would push the UDF
-    // condition ahead of (g != j).
+    // the UDF condition only reads j, written before or after j: with j computed below, a later
+    // pass would push the UDF condition ahead of (g != j).
     val udf = ScalaUDF((s: Boolean) => s, BooleanType, Seq($"j"), Seq(None),
       udfDeterministic = true)
-    Seq(Seq(udf), Seq($"j", udf)).foreach { after =>
+    Seq(Seq(udf), Seq($"j", udf), Seq(udf, $"j")).foreach { after =>
       val cond = (Seq($"f", Not($"g" === $"j")) ++ after).reduce(And)
       val optimized = Optimize.execute(query(cond))
       val correctAnswer = testStringRelation
@@ -914,10 +915,10 @@ class FilterPushdownSuite extends PlanTest {
       comparePlans(optimized, correctAnswer)
       assert(filterConjuncts(optimized) === filterConjuncts(correctAnswer))
     }
-    // A UDF condition that reads an alias the layer does not compute does not keep j from being
-    // filtered on below (g != j).
-    val udfOverG = ScalaUDF((s: Boolean) => s, BooleanType, Seq($"g"), Seq(None),
-      udfDeterministic = true)
+    // A UDF condition that also reads an alias the layer does not compute does not keep j from
+    // being filtered on below (g != j).
+    val udfOverG = ScalaUDF((s: Boolean, t: Boolean) => s && t, BooleanType, Seq($"g", $"j"),
+      Seq(None, None), udfDeterministic = true)
     check($"f" && Not($"g" === $"j") && $"j" && udfOverG,
       testStringRelation
         .select($"a", $"b", $"e", expensiveRLike("magic") as "f")
@@ -926,6 +927,43 @@ class FilterPushdownSuite extends PlanTest {
         .where($"j")
         .select($"a", $"f", expensiveRLike("other") as "g", $"j")
         .where(Not($"g" === $"j") && udfOverG))
+    // Nor is j filtered on below (g != j) when the UDF condition also reads a cheap alias, which
+    // a later pass would inline when pushing it.
+    val udfOverJAndC = ScalaUDF((s: Boolean, c: Int) => s, BooleanType, Seq($"j", $"c"),
+      Seq(None, None), udfDeterministic = true)
+    val cheapQuery = testStringRelation
+      .select($"a", ($"a" + 1) as "c", expensiveRLike("magic") as "f",
+        expensiveRLike("other") as "g", expensiveRLike("third") as "j")
+      .where($"f" && Not($"g" === $"j") && $"j" && udfOverJAndC)
+      .analyze
+    val cheapOnce = PushPredicateThroughNonJoin(cheapQuery)
+    val cheapAnswer = testStringRelation
+      .select($"a", $"b", $"e", expensiveRLike("magic") as "f")
+      .where($"f")
+      .select($"a", ($"a" + 1) as "c", $"f", expensiveRLike("other") as "g",
+        expensiveRLike("third") as "j")
+      .where(Not($"g" === $"j") && $"j" && udfOverJAndC)
+      .analyze
+    comparePlans(cheapOnce, cheapAnswer)
+    assert(filterConjuncts(cheapOnce) === filterConjuncts(cheapAnswer))
+    // Nor when the UDF condition reads a throwable alias that the layer computes: the condition
+    // is throwable over the alias, but not over the attribute a later pass sees.
+    val udfOverT = ScalaUDF((s: Boolean) => s, BooleanType, Seq($"t"), Seq(None),
+      udfDeterministic = true)
+    val udfOverTQuery = testStringRelation
+      .select($"a", expensiveRLike("magic") as "f", expensiveRLike("other") as "g",
+        throwing as "t")
+      .where($"f" && Not($"g" === $"t") && $"t" && udfOverT)
+      .analyze
+    val udfOverTOptimized = Optimize.execute(udfOverTQuery)
+    val udfOverTAnswer = testStringRelation
+      .select($"a", $"b", $"e", expensiveRLike("magic") as "f")
+      .where($"f")
+      .select($"a", $"f", expensiveRLike("other") as "g", throwing as "t")
+      .where(Not($"g" === $"t") && $"t" && udfOverT)
+      .analyze
+    comparePlans(udfOverTOptimized, udfOverTAnswer)
+    assert(filterConjuncts(udfOverTOptimized) === filterConjuncts(udfOverTAnswer))
     // Nor does a UDF condition that only reads an alias computed in an earlier layer, which later
     // passes push below the projection on top whether or not j is filtered on below (g != j)
     // (SPARK-60730), so one application of the rule is checked.
@@ -978,7 +1016,8 @@ class FilterPushdownSuite extends PlanTest {
   }
 
   test("SPARK-60731: the conditions after the one that ends the split are not filtered on below " +
-    "it past a non-deterministic condition or when they would leave nothing to defer") {
+    "it past a non-deterministic condition or when they would leave nothing to defer or split " +
+    "shared work") {
     val raiseError = IsNull(RaiseError(Literal("boom")))
     val twoAliases = testStringRelation
       .select($"a", expensiveRLike("magic") as "f", expensiveRLike("other") as "g")

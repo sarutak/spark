@@ -3036,20 +3036,21 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
    * division by zero, can still be computed early this way.
    *
    * Later passes can still move a deterministic condition that is not throwable, including one
-   * calling a UDF that can fail, ahead of some of the conditions written before it: one that only
-   * reads aliases computed in a lower layer is cheap there, and this rule pushes it, as it does
-   * any cheap condition that is not throwable, no lower than the filter of the highest layer that
-   * computes an expensive alias it reads. It does not move past the filter of a non-deterministic
-   * condition, which `CombineFilters` neither merges into nor moves into the filter below, and
-   * which this rule does not push a filter through. If they shared a filter, this rule would move
-   * a deterministic condition written after the non-deterministic one that is not throwable and
-   * only reads aliases computed below, and `CombineFilters` one that cannot fail, ahead of it, and
-   * this rule would push the non-deterministic one, when it only reads aliases computed below,
-   * ahead of the conditions written before it. That is why a non-deterministic condition
-   * gets a filter of its own in the split. So, when the split places at least one condition, the
-   * caller gives each non-deterministic condition it leaves above the projection a filter of its
-   * own too. The projection on top computes the aliases of the conditions left above it, as
-   * without the split.
+   * calling a UDF that can fail, ahead of some of the conditions written before it, and so can a
+   * condition over a throwable alias computed in a lower layer, which no longer makes it throwable
+   * there: one that only reads aliases computed in a lower layer is cheap there, and this rule
+   * pushes it, as it does any cheap condition that is not throwable, no lower than the filter of
+   * the highest layer that computes an expensive alias it reads. It does not move past the filter
+   * of a non-deterministic condition, which `CombineFilters` neither merges into nor moves into the
+   * filter below, and which this rule does not push a filter through. If they shared a filter, this
+   * rule would move a deterministic condition written after the non-deterministic one that is not
+   * throwable and only reads aliases computed below, and `CombineFilters` one that cannot fail,
+   * ahead of it, and this rule would push the non-deterministic one, when it only reads aliases
+   * computed below, ahead of the conditions written before it. That is why a non-deterministic
+   * condition gets a filter of its own in the split. So, when the split places at least one
+   * condition, the caller gives each non-deterministic condition it leaves above the projection a
+   * filter of its own too. The projection on top computes the aliases of the conditions left above
+   * it, as without the split.
    *
    * Whole-stage codegen already defers a projected expression past a filter that does not need
    * it (`CodegenSupport.evaluateRequiredVariables`), so this rule only buys the same saving on
@@ -3095,21 +3096,22 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
    * below it, in their written order. That layer computes the aliases they need, and is only added
    * while it still leaves an expensive alias for a later one, none of the aliases it leaves shares
    * expensive work with one it computes, which would then run twice, and no condition after the one
-   * ending the split that can fail and is not throwable would then read no expensive alias computed
-   * on top, which a later pass would push ahead of the condition ending the split; a condition that
+   * ending the split, up to the first non-deterministic one, that can fail would then read an
+   * expensive alias this layer computes, none computed on top and no throwable alias left on top,
+   * as a later pass would then push it ahead of the condition ending the split; a condition that
    * would break one of these stays above. For example, with only `f` and `g` expensive and sharing
    * no work, `f != g AND f` computes `f` and filters on `f` below `f != g`, which stays above the
    * projection. The condition that ends the split reads the aliases not computed yet that these
    * conditions read, so the projection on top would compute them on the same rows, also with
-   * whole-stage codegen; an alias they only share expensive work with is computed early as for the
-   * earlier layers (see above). A condition that cannot fail only drops rows, so moving it ahead of
-   * the conditions before it, which may fail, only lets fewer rows reach them. Later passes split
-   * each layer the same way, so in a layer's filter a condition that cannot fail can likewise be
-   * filtered on below the first one, when that one needs every expensive alias the layer computes:
-   * with `j` expensive too, `f != g AND j AND f` filters on `f`, then on `f != g`, then on `j`.
-   * Among the conditions that cannot fail, the split does not otherwise order by cost: in this
-   * example, and in `(f || g) AND j`, it computes `f` and `g` on more rows than filtering on `j`
-   * first would (SPARK-61680).
+   * whole-stage codegen, and so it would an alias they only share expensive work with. A condition
+   * that cannot fail only drops rows, so moving it ahead of the conditions before it, which may
+   * fail, only lets fewer rows reach them. Later passes split each layer the same way, so in a
+   * layer's filter a condition that cannot fail can likewise be filtered on below the first one,
+   * when that one needs every expensive alias the layer computes: with `j` expensive too,
+   * `f != g AND j AND f` filters on `f`, then on `f != g`, then on `j`. Among the conditions that
+   * cannot fail, the split does not otherwise order by cost: in this example, and in
+   * `(f || g) AND j`, it computes `f` and `g` on more rows than filtering on `j` first would
+   * (SPARK-61680).
    *
    * Returns the new plan, the alias attributes it has already computed, and the un-placed
    * conditions (in their original, alias-referencing form and written order).
@@ -3174,59 +3176,62 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
     // Projection order is stable, unlike the alias map's iteration order.
     val orderedAliases = project.projectList.collect { case a: Alias => a }
 
-    var pending: Seq[(AttributeSet, Expression)] = expensiveConds.map {
-      case (cond, used) => (unitOf(AttributeSet(used.keys)), cond)
+    // Each condition with the aliases it needs and the aliases it reads.
+    var pending: Seq[(AttributeSet, Expression, AttributeSet)] = expensiveConds.map {
+      case (cond, used) => (unitOf(AttributeSet(used.keys)), cond, AttributeSet(used.keys))
     }
     var plan = baseChild
     var computed = AttributeSet.empty
     var searching = true
     while (searching && pending.nonEmpty) {
-      val (needed, head) = pending.head
+      val (needed, head, _) = pending.head
       val remaining = expensiveAliases -- computed
       // The aliases the next layer needs, the conditions of its filter, and the rest.
       val nextLayer = if (!remaining.subsetOf(needed)) {
         // The next condition and, when it is deterministic, the deterministic ones right after it
         // that only need aliases computed already.
-        val (inFilter, rest) = nextFilter(pending)(
-          _._2.deterministic, { case (condNeeded, _) => condNeeded.subsetOf(computed ++ needed) })
+        val (inFilter, rest) = nextFilter(pending)(_._2.deterministic, {
+          case (condNeeded, _, _) => condNeeded.subsetOf(computed ++ needed)
+        })
         Some((needed, inFilter, rest))
       } else if (head.deterministic) {
         // The head ends the split, but first the conditions after it that cannot fail get a layer
         // of their own (see the docstring).
-        val following = pending.indices.tail.takeWhile(idx => pending(idx)._2.deterministic)
-        def aliasesRead(cond: Expression): AttributeSet =
-          AttributeSet(cond.references.filter(aliasMap.contains)) -- computed
-        // Whether `cond` can fail and a later pass would push it below the projection on top,
-        // ahead of the head, once the layer computes `grown`: it would then read no expensive
-        // alias computed on top.
-        def exposed(cond: Expression, grown: AttributeSet): Boolean = {
-          val expensiveRead = aliasesRead(cond).filter(expensiveAliases.contains)
-          expensiveRead.nonEmpty && expensiveRead.subsetOf(grown) &&
-            !ExprUtils.canEvaluateUnconditionally(cond) && !replaceAlias(cond, aliasMap).throwable
+        val conds = pending.toIndexedSeq
+        val following = conds.indices.tail.takeWhile(idx => conds(idx)._2.deterministic)
+        val cannotFail =
+          following.map(idx => idx -> ExprUtils.canEvaluateUnconditionally(conds(idx)._2)).toMap
+        def aliasesRead(idx: Int): AttributeSet = conds(idx)._3 -- computed
+        // Whether the condition can fail and a later pass would push it below the projection on
+        // top, ahead of the head, once the layer computes `grown`: it would then read an expensive
+        // alias the layer computes, none computed on top, and no throwable alias left on top.
+        def exposed(idx: Int, grown: AttributeSet): Boolean = {
+          val expensiveRead = aliasesRead(idx).filter(expensiveAliases.contains)
+          expensiveRead.nonEmpty && expensiveRead.subsetOf(grown) && !cannotFail(idx) && {
+            val onTop = AttributeMap(aliasMap.toSeq.filterNot {
+              case (attr, _) => computed.contains(attr) || grown.contains(attr)
+            })
+            !replaceAlias(conds(idx)._2, onTop).throwable
+          }
         }
         val (deferred, deferredNeeded) = following
-          .filter { idx =>
-            val cond = pending(idx)._2
-            aliasesRead(cond).subsetOf(head.references) &&
-              ExprUtils.canEvaluateUnconditionally(cond)
-          }
+          .filter(idx => cannotFail(idx) && aliasesRead(idx).subsetOf(head.references))
           .foldLeft((Set.empty[Int], AttributeSet.empty)) { case ((taken, unit), idx) =>
-            val grown = unit ++ pending(idx)._1
+            val grown = unit ++ conds(idx)._1
             val left = remaining -- grown
             // Only while the layer still leaves an expensive alias for a later one, no alias it
-            // leaves shares expensive work with one it computes, and no condition left after the
-            // head is exposed.
+            // leaves shares expensive work with one it computes (also through a throwable alias,
+            // unlike the units), and no condition left after the head is exposed.
             if (left.nonEmpty && (partsOf(left) intersect partsOf(grown -- computed)).isEmpty &&
-                !following.exists(other => !taken.contains(other) && other != idx &&
-                  exposed(pending(other)._2, grown))) {
+                !following.exists(exposed(_, grown))) {
               (taken + idx, grown)
             } else {
               (taken, unit)
             }
           }
         Option.when(deferred.nonEmpty) {
-          val (inFilter, rest) = pending.indices.partition(deferred.contains)
-          (deferredNeeded, inFilter.map(pending), rest.map(pending))
+          val (inFilter, rest) = conds.indices.partition(deferred.contains)
+          (deferredNeeded, inFilter.map(conds), rest.map(conds))
         }
       } else {
         None

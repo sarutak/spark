@@ -19,7 +19,7 @@ package org.apache.spark.sql.execution.python
 
 import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.catalyst.plans.logical.{ArrowEvalPython, BatchEvalPython, Limit, LocalLimit}
-import org.apache.spark.sql.execution.{FileSourceScanExec, SparkPlan}
+import org.apache.spark.sql.execution.{FileSourceScanExec, FilterExec, SparkPlan}
 import org.apache.spark.sql.execution.datasources.v2.BatchScanExec
 import org.apache.spark.sql.execution.datasources.v2.parquet.ParquetScan
 import org.apache.spark.sql.functions.{col, concat, lit, raise_error, when}
@@ -251,7 +251,10 @@ class ExtractPythonUDFsSuite extends SharedSparkSession {
       .flatMap(_.udfs).count(_.children.forall(_.isInstanceOf[Attribute]))
     assert(udfsOverA === 1, df.queryExecution.executedPlan)
     // The split applied: j's UDF is evaluated in a later evaluation, above the filter on f and t.
-    assert(collectBatchExec(df.queryExecution.executedPlan).size === 2,
+    val batchExecs = collectBatchExec(df.queryExecution.executedPlan)
+    assert(batchExecs.size === 2, df.queryExecution.executedPlan)
+    val jExec = batchExecs.filter(_.udfs.exists(!_.children.forall(_.isInstanceOf[Attribute])))
+    assert(jExec.size === 1 && jExec.head.exists(_.isInstanceOf[FilterExec]),
       df.queryExecution.executedPlan)
   }
 }
