@@ -2654,7 +2654,8 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
     // below the projection as a cheap part only when no expensive part is written before it,
     // and the parts left above the projection keep their written order.
     // SPARK-60731: The projection split places the parts in their written order (see
-    // `splitProjectForExpensiveConditions` for the exceptions).
+    // `splitProjectForExpensiveConditions` for the exceptions, among them a throwable alias that
+    // shares a Python UDF with an earlier part's alias).
     // SPARK-13473: We can't push the predicate down when the underlying projection output non-
     // deterministic field(s).  Non-deterministic expressions are essentially stateful. This
     // implies that, for a given input row, the output are determined by the expression's initial
@@ -3038,11 +3039,12 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
    * reads aliases computed in a lower layer is cheap there, and this rule pushes it, as it does
    * any cheap condition that is not throwable, no lower than the filter of the highest layer that
    * computes an expensive alias it reads. It does not move past the filter of a non-deterministic
-   * condition, which `CombineFilters` does not merge into and this rule does not push a filter
-   * through. If they shared a filter, this rule, or `CombineFilters` for a condition that cannot
-   * fail, would move a deterministic condition written after the non-deterministic one ahead of
-   * it, and this rule would push the non-deterministic one, when it only reads aliases computed
-   * below, ahead of the conditions written before it. That is why a non-deterministic condition
+   * condition, which `CombineFilters` neither merges into nor moves into the filter below, and
+   * which this rule does not push a filter through. If they shared a filter, this rule would move
+   * a deterministic condition written after the non-deterministic one that is not throwable and
+   * only reads aliases computed below, and `CombineFilters` one that cannot fail, ahead of it, and
+   * this rule would push the non-deterministic one, when it only reads aliases computed below,
+   * ahead of the conditions written before it. That is why a non-deterministic condition
    * gets a filter of its own in the split. So, when the split places at least one condition, the
    * caller gives each non-deterministic condition it leaves above the projection a filter of its
    * own too. The projection on top computes the aliases of the conditions left above it, as
@@ -3062,22 +3064,21 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
    *    would re-evaluate the shared part on every row below the filter and again on every
    *    survivor (a struct-returning UDF read field by field is the common shape). A throwable
    *    alias is the exception: it is not pulled into the layer of an earlier condition through
-   *    a shared part without a Python UDF, so it does not raise on rows the conditions before
-   *    its first reader drop, even though that part then runs twice, a cost whole-stage codegen
-   *    does not remove. When a condition reads it, it still pulls in the aliases sharing its
-   *    work, except the throwable ones sharing only work without a Python UDF. When
-   *    whole-stage codegen covers the operator, it already defers the alias past the filter (see
-   *    above), so the exception only costs the second run; but the optimizer cannot know in
-   *    advance that codegen will cover it, even with whole-stage codegen enabled.
-   *    A shared Python UDF would run in a second Python evaluation, so there the throwable alias
-   *    still moves with the aliases sharing it, as with the split off, and can raise on the rows
-   *    the earlier conditions drop when codegen does not cover the projection. Computing the
-   *    shared part only once for a throwable alias, when the alias sharing it evaluates it
-   *    unconditionally, is the subject of SPARK-61515, which would also remove this exception.
+   *    shared work without a Python UDF, so it does not raise on rows the conditions before its
+   *    first reader drop, even though that work then runs twice. When a condition reads it, it
+   *    still pulls in the aliases sharing its work, except throwable aliases that share no Python
+   *    UDF with it. Whole-stage codegen, when it covers the operator, already defers the alias
+   *    past the filter (see above) but not the second run, and the optimizer cannot know in
+   *    advance that codegen will cover it, even with whole-stage codegen enabled. A shared Python
+   *    UDF would run in a second Python evaluation, so there the throwable alias still moves with
+   *    the aliases sharing it, as with the split off, and can raise on the rows the earlier
+   *    conditions drop when codegen does not cover the projection. Computing the shared work only
+   *    once for a throwable alias, when the alias sharing it evaluates it unconditionally, is the
+   *    subject of SPARK-61515, which would also remove this exception.
    *
    * The conditions from the first one that needs every expensive alias not computed yet
    * (counting the aliases that share expensive work with the ones it reads, directly or through
-   * each other, except a throwable alias sharing only work without a Python UDF) are left
+   * each other, except throwable aliases that share no Python UDF with them) are left
    * un-placed for the caller to put above the projection -- where expensive conditions go when
    * there is nothing worth splitting. So such a condition ends the split: the conditions after it
    * are not placed either, even those that need fewer aliases. A throwable alias not computed yet

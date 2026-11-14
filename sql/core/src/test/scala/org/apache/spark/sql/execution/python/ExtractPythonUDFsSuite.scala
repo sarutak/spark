@@ -17,11 +17,12 @@
 
 package org.apache.spark.sql.execution.python
 
+import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.catalyst.plans.logical.{ArrowEvalPython, BatchEvalPython, Limit, LocalLimit}
 import org.apache.spark.sql.execution.{FileSourceScanExec, SparkPlan}
 import org.apache.spark.sql.execution.datasources.v2.BatchScanExec
 import org.apache.spark.sql.execution.datasources.v2.parquet.ParquetScan
-import org.apache.spark.sql.functions.col
+import org.apache.spark.sql.functions.{col, concat, lit, raise_error, when}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
 
@@ -235,6 +236,20 @@ class ExtractPythonUDFsSuite extends SharedSparkSession {
       case a: ArrowEvalPython => assert(a.child.isInstanceOf[LocalLimit])
       case _ =>
     }
+  }
+
+  test("SPARK-60731: a throwable alias sharing a Python UDF with an earlier condition's alias " +
+    "does not run the Python UDF a second time") {
+    val df = Seq(("Hello", 4)).toDF("a", "b")
+      .select(col("a"), batchedPythonUDF(col("a")) as "f",
+        when(batchedPythonUDF(col("a")), lit(true)).otherwise(raise_error(lit("boom")).isNull)
+          as "t",
+        batchedPythonUDF(concat(col("a"), lit("x"))) as "j")
+      .where(col("f") && col("t") && col("j"))
+    // The UDF over `a` alone, which f and t share, is evaluated once; the one of j once more.
+    val udfsOverA = collectBatchExec(df.queryExecution.executedPlan)
+      .flatMap(_.udfs).count(_.children.forall(_.isInstanceOf[Attribute]))
+    assert(udfsOverA === 1, df.queryExecution.executedPlan)
   }
 }
 

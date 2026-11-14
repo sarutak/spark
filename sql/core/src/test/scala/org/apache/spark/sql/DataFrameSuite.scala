@@ -3014,8 +3014,9 @@ class DataFrameSuite extends SharedSparkSession
       assert(e.getMessage.contains("g called with"))
     }
 
-    // Each of these filters with a non-deterministic condition is split (asserted below), and
-    // returns the same rows with the split on as with it off. The non-deterministic condition:
+    // Each of these filters with a non-deterministic condition over UDF results that are never
+    // null is split (asserted below), and returns the same rows with the split on as with it off.
+    // The non-deterministic condition:
     //  (1) is written first;
     //  (2) is written after two conditions and reads only the alias of the first;
     //  (3) is the same, with a condition after it that only reads computed aliases;
@@ -3119,6 +3120,10 @@ class DataFrameSuite extends SharedSparkSession
           // to 10.
           if (split) {
             assert((10L to 14L).contains(gt5Calls.value), s"gt5 ran ${gt5Calls.value} times")
+            val udfProjects = query(readsT).queryExecution.optimizedPlan.collect {
+              case p: Project if p.projectList.exists(_.exists(_.isInstanceOf[ScalaUDF])) => p
+            }
+            assert(udfProjects.size > 1, "The split did not apply")
           }
         } else {
           checkError(

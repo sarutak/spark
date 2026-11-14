@@ -852,7 +852,8 @@ class FilterPushdownSuite extends PlanTest {
 
   test("SPARK-60731: a throwable alias is not pulled into the layer of an earlier condition by " +
     "an alias sharing its expensive work") {
-    // g raises on the rows f drops, so it must not be computed together with f.
+    // g raises on the rows f drops, so it must not be computed together with f. The regex they
+    // share then runs in both layers; SPARK-61515 would change this plan.
     val throwing = If(expensiveRLike("magic"), Literal(true), IsNull(RaiseError(Literal("boom"))))
     val originalQuery = testStringRelation
       .select($"a", expensiveRLike("magic") as "f", throwing as "g",
@@ -964,14 +965,8 @@ class FilterPushdownSuite extends PlanTest {
       case p: Project if p.projectList.exists(_.exists(_.isInstanceOf[PythonUDF])) => p
     }
     assert(udfProjects.size === 1, optimized)
-    assert(udfProjects.head.projectList.collect { case a: Alias => a.name }.toSet ===
-      Set("f", "t"), optimized)
+    assert(layerAliases(optimized).head === Set("f", "t"), optimized)
   }
-
-  // The aliases that each projection of `plan` computing an alias computes, from the bottom.
-  private def layerAliases(plan: LogicalPlan): Seq[Set[String]] = plan.collect {
-    case p: Project => p.projectList.collect { case a: Alias => a.name }.toSet
-  }.filter(_.nonEmpty).reverse
 
   test("SPARK-60731: the Python UDF exception for a throwable alias follows shared work " +
     "through other aliases, decides where the split ends, and needs a shared Python UDF") {
@@ -1029,6 +1024,7 @@ class FilterPushdownSuite extends PlanTest {
     // t is not among the aliases the condition on f needs, although it is among those not
     // computed yet, so the condition on f does not end the split: f is computed and filtered on
     // first even though t is the only other expensive alias, whether a condition reads t or not.
+    // The regex they share runs in both layers; SPARK-61515 would change these plans.
     Seq(true, false).foreach { readsT =>
       val onlyFAndT = testStringRelation
         .select($"a", expensiveRLike("magic") as "f", throwing as "t")
@@ -1419,13 +1415,19 @@ class FilterPushdownSuite extends PlanTest {
 
   // The conjuncts of every filter of `plan`, from the top, in their order, which `comparePlans`
   // does not check. It normalizes the expression IDs, so the conjuncts of two plans built
-  // separately can be compared, as written, operands included. It does not
-  // canonicalize them: with every expression ID normalized, canonicalized attributes of the same
-  // type are equal, so `a > 1` would match `b > 1`.
+  // separately can be compared, as written, operands included. It does not canonicalize them:
+  // with every expression ID normalized, canonicalized attributes of the same type are equal, so
+  // `a > 1` would match `b > 1`.
   private def filterConjuncts(plan: LogicalPlan): Seq[Seq[Expression]] =
     normalizeExprIds(plan).collect {
       case Filter(condition, _) => splitConjunctivePredicates(condition)
     }
+
+  // For each projection of `plan` that computes an alias, the names of those aliases, from the
+  // bottom up.
+  private def layerAliases(plan: LogicalPlan): Seq[Set[String]] = plan.collect {
+    case p: Project => p.projectList.collect { case a: Alias => a.name }.toSet
+  }.filter(_.nonEmpty).reverse
 
   // Checks the conjuncts of the top filter of `plan` against the non-empty `expected`, in their
   // order, normalized as `filterConjuncts` does.
