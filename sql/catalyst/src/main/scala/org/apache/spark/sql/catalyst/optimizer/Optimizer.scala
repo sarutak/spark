@@ -3039,13 +3039,14 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
    * any cheap condition that is not throwable, no lower than the filter of the highest layer that
    * computes an expensive alias it reads. It does not move past the filter of a non-deterministic
    * condition, which `CombineFilters` does not merge into and this rule does not push a filter
-   * through; in a filter shared with it, such a condition written after it would be moved ahead
-   * of it, and the non-deterministic condition, when it only reads aliases computed below, would
-   * be pushed ahead of the conditions before it. That is why a non-deterministic condition gets a
-   * filter of its own in the split. So, when the split places at least one condition, the caller
-   * gives each non-deterministic condition it leaves above the projection a filter of its own
-   * too. The projection on top computes the aliases of the conditions left above it, as without
-   * the split.
+   * through. If they shared a filter, this rule, or `CombineFilters` for a condition that cannot
+   * fail, would move a deterministic condition written after the non-deterministic one ahead of
+   * it, and this rule would push the non-deterministic one, when it only reads aliases computed
+   * below, ahead of the conditions written before it. That is why a non-deterministic condition
+   * gets a filter of its own in the split. So, when the split places at least one condition, the
+   * caller gives each non-deterministic condition it leaves above the projection a filter of its
+   * own too. The projection on top computes the aliases of the conditions left above it, as
+   * without the split.
    *
    * Whole-stage codegen already defers a projected expression past a filter that does not need
    * it (`CodegenSupport.evaluateRequiredVariables`), so this rule only buys the same saving on
@@ -3080,8 +3081,8 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
    * un-placed for the caller to put above the projection -- where expensive conditions go when
    * there is nothing worth splitting. So such a condition ends the split: the conditions after it
    * are not placed either, even those that need fewer aliases. A throwable alias not computed yet
-   * still counts among the expensive aliases left, while a condition that does not read it needs
-   * it only through a shared Python UDF, so otherwise such a condition does not end the split:
+   * still counts among the expensive aliases left, so a condition that does not read it, and
+   * shares no Python UDF with it directly or through other aliases, does not end the split:
    * with `f` and a throwable `t` sharing work without a Python UDF as the only expensive aliases,
    * `f` is computed and filtered on first, and `t` above it.
    *
@@ -3189,6 +3190,7 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
    */
   private def nextFilter[T](conds: Seq[T])(
       deterministic: T => Boolean, canJoin: T => Boolean): (Seq[T], Seq[T]) = {
+    require(conds.nonEmpty)
     if (deterministic(conds.head)) {
       val (joined, rest) = conds.tail.span(c => deterministic(c) && canJoin(c))
       (conds.head +: joined, rest)

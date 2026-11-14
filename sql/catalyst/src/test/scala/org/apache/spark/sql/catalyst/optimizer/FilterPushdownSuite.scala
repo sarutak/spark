@@ -968,7 +968,7 @@ class FilterPushdownSuite extends PlanTest {
       Set("f", "t"), optimized)
   }
 
-  // The aliases each projection of `plan` with an expensive alias computes, from the bottom.
+  // The aliases that each projection of `plan` computing an alias computes, from the bottom.
   private def layerAliases(plan: LogicalPlan): Seq[Set[String]] = plan.collect {
     case p: Project => p.projectList.collect { case a: Alias => a.name }.toSet
   }.filter(_.nonEmpty).reverse
@@ -1003,6 +1003,24 @@ class FilterPushdownSuite extends PlanTest {
       .where($"f" && $"t" && $"j")
       .analyze
     assert(layerAliases(Optimize.execute(sharesOnlyRegex)).head === Set("f"))
+    // Two throwable aliases sharing the Python UDF are computed together too.
+    val twoThrowable = testStringRelation
+      .select($"a", expensiveRLike("magic") as "f",
+        If(pythonUDF > 0, Literal(true), raiseError) as "t1", expensiveRLike("third") as "j",
+        If(pythonUDF > 1, Literal(true), raiseError) as "t2")
+      .where($"f" && $"t1" && $"j" && $"t2")
+      .analyze
+    assert(layerAliases(Optimize.execute(twoThrowable)).contains(Set("t1", "t2")))
+  }
+
+  test("SPARK-60731: a written IS NOT NULL condition over an expensive alias is placed in its " +
+    "written position") {
+    val originalQuery = testStringRelation
+      .select($"a", expensiveRLike("magic") as "f", expensiveRLike("other") as "g",
+        expensiveRLike("third") as "j")
+      .where($"f" && IsNotNull($"g") && $"j")
+      .analyze
+    assert(layerAliases(Optimize.execute(originalQuery)) === Seq(Set("f"), Set("g"), Set("j")))
   }
 
   test("SPARK-60731: a throwable alias sharing work with the aliases a condition reads does not " +
