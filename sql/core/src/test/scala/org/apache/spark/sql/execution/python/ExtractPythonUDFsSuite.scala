@@ -250,6 +250,9 @@ class ExtractPythonUDFsSuite extends SharedSparkSession {
     val udfsOverA = collectBatchExec(df.queryExecution.executedPlan)
       .flatMap(_.udfs).count(_.children.forall(_.isInstanceOf[Attribute]))
     assert(udfsOverA === 1, df.queryExecution.executedPlan)
+    // The split applied: j's UDF is evaluated in a later evaluation, above the filter on f and t.
+    assert(collectBatchExec(df.queryExecution.executedPlan).size === 2,
+      df.queryExecution.executedPlan)
   }
 }
 

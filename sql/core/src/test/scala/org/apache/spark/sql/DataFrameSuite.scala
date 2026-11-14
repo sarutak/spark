@@ -3140,7 +3140,9 @@ class DataFrameSuite extends SharedSparkSession
     // `g + j >= 0` needs every expensive alias not computed yet, so it ends the split, but
     // `j >= 80`, which cannot fail, is still filtered on below it, so g only runs on the 20 rows
     // it keeps. In the second query, `u(j)`, a UDF that may fail, takes its place and stays above
-    // `g + j >= 0`, so g runs on the 50 rows `f >= 50` keeps.
+    // `g + j >= 0`, so g runs on the 50 rows `f >= 50` keeps. In the third, `j >= 80` is not
+    // filtered on below `g + j >= 0` either, as a later pass would then push `u(j)`, which would
+    // only read the `j` computed below, ahead of it.
     val gCalls = sparkContext.longAccumulator("gCalls")
     val f = udf((i: Long) => i)
     val g = udf((i: Long) => {
@@ -3152,15 +3154,16 @@ class DataFrameSuite extends SharedSparkSession
     def df: DataFrame = spark.range(0, 100, 1, 1)
       .select($"id", f($"id") as "f", g($"id") as "g", j($"id") as "j")
     val expected = (80L until 100L).map(i => Row(i, i, i, i))
-    Seq[(Column, Long)](($"j" >= 80, 20L), (u($"j"), 50L)).foreach { case (after, calls) =>
-      withSQLConf(
-        SQLConf.WHOLESTAGE_CODEGEN_ENABLED.key -> "false",
-        SQLConf.SPLIT_PROJECTION_FOR_EXPENSIVE_FILTERS.key -> "true") {
-        gCalls.reset()
-        val q = df.where($"f" >= 50 && $"g" + $"j" >= 0 && after)
-        assert(q.collect().toSeq === expected)
-        assert(gCalls.value === calls)
-      }
+    Seq[(Column, Long)](($"j" >= 80, 20L), (u($"j"), 50L), ($"j" >= 80 && u($"j"), 50L)).foreach {
+      case (after, calls) =>
+        withSQLConf(
+          SQLConf.WHOLESTAGE_CODEGEN_ENABLED.key -> "false",
+          SQLConf.SPLIT_PROJECTION_FOR_EXPENSIVE_FILTERS.key -> "true") {
+          gCalls.reset()
+          val q = df.where($"f" >= 50 && $"g" + $"j" >= 0 && after)
+          assert(q.collect().toSeq === expected)
+          assert(gCalls.value === calls, s"after: $after")
+        }
     }
   }
 

@@ -3077,38 +3077,39 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
    *    once for a throwable alias, when the alias sharing it evaluates it unconditionally, is the
    *    subject of SPARK-61515, which would also remove this exception.
    *
-   * The conditions from the first one that needs every expensive alias not computed yet
-   * (counting the aliases that share expensive work with the ones it reads, directly or through
-   * each other, except throwable aliases that share no Python UDF with them) are left
-   * un-placed for the caller to put above the projection -- where expensive conditions go when
-   * there is nothing worth splitting. So such a condition ends the split: the conditions after it
-   * are not placed either, even those that need fewer aliases, except the ones that cannot fail
-   * (see below). A throwable alias not computed yet
-   * still counts among the expensive aliases left, so a condition that does not read it, and
-   * shares no Python UDF with it directly or through other aliases, does not end the split:
-   * with `f` and a throwable `t` sharing work without a Python UDF as the only expensive aliases,
-   * `f` is computed and filtered on first, and `t` above it.
+   * The conditions from the first one that needs every expensive alias not computed yet (counting
+   * the aliases that share expensive work with the ones it reads, directly or through each other,
+   * except throwable aliases that share no Python UDF with them) are left un-placed for the caller
+   * to put above the projection -- where expensive conditions go when there is nothing worth
+   * splitting. So such a condition ends the split: the conditions after it are not placed either,
+   * even those that need fewer aliases, except the ones that cannot fail (see below). A throwable
+   * alias not computed yet still counts among the expensive aliases left, so a condition that does
+   * not read it, and shares no Python UDF with it directly or through other aliases, does not end
+   * the split: with `f` and a throwable `t` sharing work without a Python UDF as the only expensive
+   * aliases, `f` is computed and filtered on first, and `t` above it.
    *
    * Before a deterministic condition ends the split, the conditions written after it, up to the
    * first non-deterministic one, that `ExprUtils.canEvaluateUnconditionally` accepts (over the
-   * aliases, so a condition reading a throwable alias can be one) and only need aliases computed
-   * already or needed by the condition that ends the split, are filtered on in a layer below it, in
-   * their written order, as long as that layer still leaves an expensive alias for a later one and
-   * none of the aliases it leaves shares expensive work with one it computes, which would then run
-   * twice; a condition that would break either stays above. For example, with only `f` and `g`
-   * expensive and sharing no work, `f != g AND f` computes `f` and filters on `f` below `f != g`,
-   * which stays above the projection. The aliases this layer computes are among the ones the
-   * condition that ends the split needs, so the projection on top would compute them on the same
-   * rows, apart from the ones that condition does not read but shares expensive work with, which
-   * whole-stage codegen computes after it, as for the earlier layers (see above). A condition that
-   * cannot fail only drops rows, so moving it ahead of the conditions before it, which may fail,
-   * only lets fewer rows reach them. Later passes split each layer the same way, so in a layer's
-   * filter a condition that cannot fail can likewise be filtered on below the first one, when that
-   * one needs every expensive alias the layer computes: with `j` expensive too,
-   * `f != g AND j AND f` filters on `f`, then on `f != g`, then on `j`. Among the conditions that
-   * cannot fail, the split does not otherwise order by cost: in this example, and in
-   * `(f || g) AND j`, it computes `f` and `g` on more rows than filtering on `j` first would
-   * (SPARK-61680).
+   * aliases, so a condition reading a throwable alias can be one) and that read no alias not
+   * computed yet that the condition ending the split does not read, are filtered on in a layer
+   * below it, in their written order. That layer computes the aliases they need, and is only added
+   * while it still leaves an expensive alias for a later one, none of the aliases it leaves shares
+   * expensive work with one it computes, which would then run twice, and no condition after the one
+   * ending the split that can fail and is not throwable would then read no expensive alias computed
+   * on top, which a later pass would push ahead of the condition ending the split; a condition that
+   * would break one of these stays above. For example, with only `f` and `g` expensive and sharing
+   * no work, `f != g AND f` computes `f` and filters on `f` below `f != g`, which stays above the
+   * projection. The condition that ends the split reads the aliases not computed yet that these
+   * conditions read, so the projection on top would compute them on the same rows, also with
+   * whole-stage codegen; an alias they only share expensive work with is computed early as for the
+   * earlier layers (see above). A condition that cannot fail only drops rows, so moving it ahead of
+   * the conditions before it, which may fail, only lets fewer rows reach them. Later passes split
+   * each layer the same way, so in a layer's filter a condition that cannot fail can likewise be
+   * filtered on below the first one, when that one needs every expensive alias the layer computes:
+   * with `j` expensive too, `f != g AND j AND f` filters on `f`, then on `f != g`, then on `j`.
+   * Among the conditions that cannot fail, the split does not otherwise order by cost: in this
+   * example, and in `(f || g) AND j`, it computes `f` and `g` on more rows than filtering on `j`
+   * first would (SPARK-61680).
    *
    * Returns the new plan, the alias attributes it has already computed, and the un-placed
    * conditions (in their original, alias-referencing form and written order).
@@ -3192,18 +3193,32 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
       } else if (head.deterministic) {
         // The head ends the split, but first the conditions after it that cannot fail get a layer
         // of their own (see the docstring).
-        val (deferred, deferredNeeded) = pending.indices.tail
-          .takeWhile(idx => pending(idx)._2.deterministic)
+        val following = pending.indices.tail.takeWhile(idx => pending(idx)._2.deterministic)
+        def aliasesRead(cond: Expression): AttributeSet =
+          AttributeSet(cond.references.filter(aliasMap.contains)) -- computed
+        // Whether `cond` can fail and a later pass would push it below the projection on top,
+        // ahead of the head, once the layer computes `grown`: it would then read no expensive
+        // alias computed on top.
+        def exposed(cond: Expression, grown: AttributeSet): Boolean = {
+          val expensiveRead = aliasesRead(cond).filter(expensiveAliases.contains)
+          expensiveRead.nonEmpty && expensiveRead.subsetOf(grown) &&
+            !ExprUtils.canEvaluateUnconditionally(cond) && !replaceAlias(cond, aliasMap).throwable
+        }
+        val (deferred, deferredNeeded) = following
           .filter { idx =>
-            val (condNeeded, cond) = pending(idx)
-            condNeeded.subsetOf(needed ++ computed) && ExprUtils.canEvaluateUnconditionally(cond)
+            val cond = pending(idx)._2
+            aliasesRead(cond).subsetOf(head.references) &&
+              ExprUtils.canEvaluateUnconditionally(cond)
           }
           .foldLeft((Set.empty[Int], AttributeSet.empty)) { case ((taken, unit), idx) =>
             val grown = unit ++ pending(idx)._1
             val left = remaining -- grown
-            // Only while the layer still leaves an expensive alias for a later one, and no alias
-            // it leaves shares expensive work with one it computes.
-            if (left.nonEmpty && (partsOf(left) intersect partsOf(grown)).isEmpty) {
+            // Only while the layer still leaves an expensive alias for a later one, no alias it
+            // leaves shares expensive work with one it computes, and no condition left after the
+            // head is exposed.
+            if (left.nonEmpty && (partsOf(left) intersect partsOf(grown -- computed)).isEmpty &&
+                !following.exists(other => !taken.contains(other) && other != idx &&
+                  exposed(pending(other)._2, grown))) {
               (taken + idx, grown)
             } else {
               (taken, unit)
