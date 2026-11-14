@@ -964,6 +964,25 @@ class FilterPushdownSuite extends PlanTest {
       .analyze
     comparePlans(udfOverTOptimized, udfOverTAnswer)
     assert(filterConjuncts(udfOverTOptimized) === filterConjuncts(udfOverTAnswer))
+    // Nor when a condition after it can fail through a cheap alias, which a later pass inlines:
+    // with j computed below, it would push (c > 5 OR NOT j) ahead of (g != j), and the ANSI cast
+    // of c can fail.
+    val ansiCast = Cast($"e", IntegerType, evalMode = EvalMode.ANSI)
+    val castQuery = testStringRelation
+      .select($"a", ansiCast as "c", expensiveRLike("magic") as "f",
+        expensiveRLike("other") as "g", expensiveRLike("third") as "j")
+      .where($"f" && Not($"g" === $"j") && ($"j" || $"f") && ($"c" > 5 || Not($"j")))
+      .analyze
+    val castOptimized = Optimize.execute(castQuery)
+    val castAnswer = testStringRelation
+      .select($"a", $"b", $"e", expensiveRLike("magic") as "f")
+      .where($"f")
+      .select($"a", ansiCast as "c", $"f", expensiveRLike("other") as "g",
+        expensiveRLike("third") as "j")
+      .where(Not($"g" === $"j") && ($"j" || $"f") && ($"c" > 5 || Not($"j")))
+      .analyze
+    comparePlans(castOptimized, castAnswer)
+    assert(filterConjuncts(castOptimized) === filterConjuncts(castAnswer))
     // Nor does a UDF condition that only reads an alias computed in an earlier layer, which later
     // passes push below the projection on top whether or not j is filtered on below (g != j)
     // (SPARK-60730), so one application of the rule is checked.
@@ -994,6 +1013,25 @@ class FilterPushdownSuite extends PlanTest {
       .where(Not($"x" === $"g") && $"t")
       .analyze
     comparePlans(Optimize.execute(sharedQuery), sharedQuery)
+    // Nor is x, which (x != g) reads, filtered on below it: its layer would compute t, which
+    // shares the Python UDF with x and which (x != g) does not read, and an operator outside
+    // whole-stage codegen above that layer would compute t on the rows (x != g) drops.
+    val sharedPythonQuery = testStringRelation
+      .select($"a", (pythonUDF > 0) as "x", pythonThrowing as "t", expensiveRLike("other") as "g")
+      .where(Not($"x" === $"g") && $"x")
+      .analyze
+    comparePlans(Optimize.execute(sharedPythonQuery), sharedPythonQuery)
+    // Nor is a condition over an alias that the condition ending the split only needs through
+    // shared work: h shares f's regex, so (f != g) needs h without reading it, and whole-stage
+    // codegen would not compute h, whose UDF may fail, on the rows (f != g) drops.
+    val udfOverMagic = ScalaUDF((s: Boolean) => s, BooleanType, Seq(expensiveRLike("magic")),
+      Seq(None), udfDeterministic = true)
+    val sharedUdfQuery = testStringRelation
+      .select($"a", expensiveRLike("magic") as "f", udfOverMagic as "h",
+        expensiveRLike("other") as "g")
+      .where(Not($"f" === $"g") && $"h")
+      .analyze
+    comparePlans(Optimize.execute(sharedUdfQuery), sharedUdfQuery)
     // The work an alias left shares with an alias computed in an earlier layer does not keep a
     // condition from being filtered on below the one that ends the split, in one application of
     // the rule: t shares f's regex but is not computed with it, and (j OR f) is filtered on below
