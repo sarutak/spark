@@ -76,8 +76,8 @@ class FilterPushdownSuite extends PlanTest {
   // for every row.
   private def expensiveRLike(tag: String): Expression = $"e".rlike(Concat(Seq($"e", Literal(tag))))
 
-  // An RLIKE with a literal pattern without a group, which cannot fail; version 0 of the regex
-  // pattern cost estimate treats it as expensive.
+  // An RLIKE with a short literal pattern without `(` or `\`, which cannot fail; version 0 of the
+  // regex pattern cost estimate treats it as expensive.
   private def literalRLike(pattern: String): Expression = $"e".rlike(pattern)
 
   // This test already passes.
@@ -835,8 +835,8 @@ class FilterPushdownSuite extends PlanTest {
           .where($"j")
           .select($"a", $"f", g as "g", $"j")
           .where(Not($"g" === $"j")))
-      // LIKE cannot fail either, also with a parenthesis in the pattern, as the regex it
-      // translates to has no group.
+      // Nor can a short LIKE, also with a parenthesis in the pattern, as the regex it translates
+      // to has no group.
       val likeJ = $"e".like("(3%")
       check(Optimize.execute(testStringRelation
           .select($"a", f as "f", g as "g", likeJ as "j")
@@ -886,9 +886,6 @@ class FilterPushdownSuite extends PlanTest {
           .where($"f")
           .select($"a", $"f", g as "g")
           .where(Not($"f" === $"g")))
-      // `f != g AND f AND g`: f is filtered on below (f != g), but g, which would leave no
-      // expensive alias for a later layer, stays above, and so does (f OR g) in
-      // `f != g AND (f OR g) AND f`, while f after it is still filtered on below.
       // A non-deterministic condition after f does not keep f from being filtered on below
       // (f != g), and gets a filter of its own above it.
       check(Optimize.execute(
@@ -915,6 +912,9 @@ class FilterPushdownSuite extends PlanTest {
           .where($"j" || $"f")
           .select($"a", $"f", throwingF as "t", g as "g", $"j")
           .where($"g" === $"j" || $"t"))
+      // `f != g AND f AND g`: f is filtered on below (f != g), but g, which would leave no
+      // expensive alias for a later layer, stays above, and so does (f OR g) in
+      // `f != g AND (f OR g) AND f`, while f after it is still filtered on below.
       Seq[(Expression, Expression)](
         (Not($"f" === $"g") && $"f" && $"g", $"g"),
         (Not($"f" === $"g") && ($"f" || $"g") && $"f", $"f" || $"g")).foreach {
@@ -970,15 +970,15 @@ class FilterPushdownSuite extends PlanTest {
           .where(Not($"g" === $"j") && $"j" && ($"c" > 5 || Not($"j")))
           .analyze)
       // An alias the layer would compute that can fail: a regex whose pattern is not a literal,
-      // does not compile, or has a quantified group, which can overflow the stack on a long
-      // input, or whose input can fail, a UDF, also under an operator that cannot fail, and a
-      // throwable alias.
+      // does not compile, or has a quantified group or `\R`, which can overflow the stack on a
+      // long input, a LIKE whose pattern is long enough to overflow it, a regex whose input can
+      // fail, a UDF, also under an operator that cannot fail, and a throwable alias.
       val udfJ = ScalaUDF((s: String) => s.isEmpty, BooleanType, Seq($"e"), Seq(None),
         udfDeterministic = true)
       val udfString = ScalaUDF((s: String) => s, StringType, Seq($"e"), Seq(None),
         udfDeterministic = true)
-      Seq(expensiveRLike("third"), $"e".rlike("["), $"e".rlike("(a|b)*c"), udfString.rlike("^3"),
-        udfJ, Not(udfJ),
+      Seq(expensiveRLike("third"), $"e".rlike("["), $"e".rlike("(a|b)*c"), $"e".rlike("\\R*c"),
+        $"e".like("_" * 101), udfString.rlike("^3"), udfJ, Not(udfJ),
         If(literalRLike("^3"), Literal(true), raiseError)).foreach { failingJ =>
         val originalQuery = testStringRelation
           .select($"a", f as "f", g as "g", failingJ as "j")
