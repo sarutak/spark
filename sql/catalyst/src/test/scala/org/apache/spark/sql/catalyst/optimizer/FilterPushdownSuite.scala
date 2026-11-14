@@ -76,8 +76,8 @@ class FilterPushdownSuite extends PlanTest {
   // for every row.
   private def expensiveRLike(tag: String): Expression = $"e".rlike(Concat(Seq($"e", Literal(tag))))
 
-  // An RLIKE with a short literal pattern without `(` or `\`, which cannot fail; version 0 of the
-  // regex pattern cost estimate treats it as expensive.
+  // An RLIKE with a short literal pattern without `(`, `\` or `{`, which cannot fail; version 0
+  // of the regex pattern cost estimate treats it as expensive.
   private def literalRLike(pattern: String): Expression = $"e".rlike(pattern)
 
   // This test already passes.
@@ -970,15 +970,16 @@ class FilterPushdownSuite extends PlanTest {
           .where(Not($"g" === $"j") && $"j" && ($"c" > 5 || Not($"j")))
           .analyze)
       // An alias the layer would compute that can fail: a regex whose pattern is not a literal,
-      // does not compile, or has a quantified group or `\R`, which can overflow the stack on a
-      // long input, a LIKE whose pattern is long enough to overflow it, a regex whose input can
-      // fail, a UDF, also under an operator that cannot fail, and a throwable alias.
+      // does not compile, or has a quantified group, `\R` or a `{}` quantifier, which can
+      // overflow the stack on a long input, a LIKE whose pattern is longer than 100 characters, a
+      // regex whose input can fail, a UDF, also under an operator that cannot fail, and a
+      // throwable alias.
       val udfJ = ScalaUDF((s: String) => s.isEmpty, BooleanType, Seq($"e"), Seq(None),
         udfDeterministic = true)
       val udfString = ScalaUDF((s: String) => s, StringType, Seq($"e"), Seq(None),
         udfDeterministic = true)
       Seq(expensiveRLike("third"), $"e".rlike("["), $"e".rlike("(a|b)*c"), $"e".rlike("\\R*c"),
-        $"e".like("_" * 101), udfString.rlike("^3"), udfJ, Not(udfJ),
+        $"e".rlike(".{0,99999}c"), $"e".like("_" * 101), udfString.rlike("^3"), udfJ, Not(udfJ),
         If(literalRLike("^3"), Literal(true), raiseError)).foreach { failingJ =>
         val originalQuery = testStringRelation
           .select($"a", f as "f", g as "g", failingJ as "j")
