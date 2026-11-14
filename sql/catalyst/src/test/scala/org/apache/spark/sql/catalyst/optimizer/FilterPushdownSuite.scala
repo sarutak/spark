@@ -76,8 +76,8 @@ class FilterPushdownSuite extends PlanTest {
   // for every row.
   private def expensiveRLike(tag: String): Expression = $"e".rlike(Concat(Seq($"e", Literal(tag))))
 
-  // An RLIKE with a literal pattern, which cannot fail; version 0 of the regex pattern cost
-  // estimate treats it as expensive.
+  // An RLIKE with a literal pattern without a group, which cannot fail; version 0 of the regex
+  // pattern cost estimate treats it as expensive.
   private def literalRLike(pattern: String): Expression = $"e".rlike(pattern)
 
   // This test already passes.
@@ -835,6 +835,20 @@ class FilterPushdownSuite extends PlanTest {
           .where($"j")
           .select($"a", $"f", g as "g", $"j")
           .where(Not($"g" === $"j")))
+      // LIKE cannot fail either, also with a parenthesis in the pattern, as the regex it
+      // translates to has no group.
+      val likeJ = $"e".like("(3%")
+      check(Optimize.execute(testStringRelation
+          .select($"a", f as "f", g as "g", likeJ as "j")
+          .where($"f" && Not($"g" === $"j") && $"j")
+          .analyze),
+        testStringRelation
+          .select($"a", $"b", $"e", f as "f")
+          .where($"f")
+          .select($"a", $"b", $"e", $"f", likeJ as "j")
+          .where($"j")
+          .select($"a", $"f", g as "g", $"j")
+          .where(Not($"g" === $"j")))
       // Several such conditions share the layer's filter in their written order, also one that
       // reads an alias computed in an earlier layer, which (g != j) does not need; one
       // application of the rule places both, as later passes would otherwise push the one
@@ -956,13 +970,15 @@ class FilterPushdownSuite extends PlanTest {
           .where(Not($"g" === $"j") && $"j" && ($"c" > 5 || Not($"j")))
           .analyze)
       // An alias the layer would compute that can fail: a regex whose pattern is not a literal,
-      // or does not compile, or whose input can fail, a UDF, also under an operator that cannot
-      // fail, and a throwable alias.
+      // does not compile, or has a quantified group, which can overflow the stack on a long
+      // input, or whose input can fail, a UDF, also under an operator that cannot fail, and a
+      // throwable alias.
       val udfJ = ScalaUDF((s: String) => s.isEmpty, BooleanType, Seq($"e"), Seq(None),
         udfDeterministic = true)
       val udfString = ScalaUDF((s: String) => s, StringType, Seq($"e"), Seq(None),
         udfDeterministic = true)
-      Seq(expensiveRLike("third"), $"e".rlike("["), udfString.rlike("^3"), udfJ, Not(udfJ),
+      Seq(expensiveRLike("third"), $"e".rlike("["), $"e".rlike("(a|b)*c"), udfString.rlike("^3"),
+        udfJ, Not(udfJ),
         If(literalRLike("^3"), Literal(true), raiseError)).foreach { failingJ =>
         val originalQuery = testStringRelation
           .select($"a", f as "f", g as "g", failingJ as "j")

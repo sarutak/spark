@@ -3078,10 +3078,9 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
    *    advance that codegen will cover it, even with whole-stage codegen enabled. A shared Python
    *    UDF would run in a second Python evaluation, so there the throwable alias still moves with
    *    the aliases sharing it, as with the split off, and can raise on the rows the earlier
-   *    conditions drop when codegen does not cover the projection or an operator it does not
-   *    cover, such as a later layer's Python evaluation, takes the projection's output. Computing
-   *    the shared work only once for a throwable alias, when the alias sharing it evaluates it
-   *    unconditionally, is the subject of SPARK-61515, which would also remove this exception.
+   *    conditions drop when codegen does not cover the projection. Computing the shared work only
+   *    once for a throwable alias, when the alias sharing it evaluates it unconditionally, is the
+   *    subject of SPARK-61515, which would also remove this exception.
    *
    * The conditions from the first one that needs every expensive alias not computed yet (counting
    * the aliases that share expensive work with the ones it reads, directly or through each other,
@@ -3097,24 +3096,24 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
    * Before a deterministic condition ends the split, the conditions written after it, up to the
    * first non-deterministic one, are filtered on in a layer below it, in their written order, when
    * nothing there can fail: none of these conditions can fail over the aliases not computed yet,
-   * which a later pass inlines into a condition it pushes (`cannotFail`, which also accepts LIKE
-   * and RLIKE with a literal pattern that compiles), and no alias the layer computes can fail. A
-   * second such layer can follow when the first computes the aliases another condition needs. The
-   * layer is also only added while it still leaves an expensive alias for a later one and none of
-   * the aliases it leaves shares expensive work with one it computes, which would then run twice; a
-   * condition that would break this stays above. So the layer only drops rows earlier. It can
-   * compute an alias on rows that a later rewrite of the condition ending the split, or a check
+   * which a later pass inlines into a condition it pushes (`cannotFail`, which also accepts LIKE,
+   * and RLIKE without a group, with a literal pattern), and no alias the layer computes can fail.
+   * The layer is also only added while it still leaves an expensive alias for a later one and none
+   * of the aliases it leaves shares expensive work with one it computes, which would then run
+   * twice; a condition that would break this stays above. So the layer only drops rows earlier. It
+   * can compute an alias on rows that a later rewrite of the condition ending the split, or a check
    * inferred for it, would have dropped first, which costs time but cannot fail. For example, with
    * `f` and `g` the only expensive aliases, LIKE or RLIKE with a literal pattern under version 0 of
    * the regex pattern cost estimate, `f != g AND f` computes `f` and filters on `f` below `f != g`,
-   * which stays above the projection. The check is conservative: with an alias that can fail, such
-   * as a UDF, or a condition after the one ending the split that can, nothing is filtered on below
-   * it. Later passes split each layer the same way, so in a layer's filter a condition that cannot
-   * fail can likewise be filtered on below the first one, when that one needs every expensive alias
-   * the layer computes: with `j` expensive too, `f != g AND j AND f` filters on `f`, then on
-   * `f != g`, then on `j`. Among the conditions that cannot fail, the split does not otherwise
-   * order by cost: in this example, and in `(f || g) AND j`, it computes `f` and `g` on more rows
-   * than filtering on `j` first would (SPARK-61680).
+   * which stays above the projection. The check is conservative: when the layer would compute an
+   * alias that can fail, such as a UDF, or a condition after the one ending the split can fail,
+   * nothing is filtered on below it. Later passes split each layer the same way, so in a layer's
+   * filter a condition that cannot fail can likewise be filtered on below the first one, when that
+   * one needs every expensive alias the layer computes: with `j` expensive too,
+   * `f != g AND j AND f` filters on `f`, then on `f != g`, then on `j`. Among the conditions that
+   * cannot fail, the split does not otherwise order by cost: in this example, and in
+   * `(f || g) AND j`, it computes `f` and `g` on more rows than filtering on `j` first would
+   * (SPARK-61680).
    *
    * Returns the new plan, the alias attributes it has already computed, and the un-placed
    * conditions (in their original, alias-referencing form and written order).
@@ -3272,20 +3271,25 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
   }
 
   /**
-   * Whether `e` cannot fail: `ExprUtils.canEvaluateUnconditionally`, also accepting LIKE and
-   * RLIKE with a literal pattern that compiles, which version 0 of the regex pattern cost
-   * estimate treats as expensive (SPARK-60731).
+   * Whether `e` cannot fail: `ExprUtils.canEvaluateUnconditionally`, also accepting LIKE, and
+   * RLIKE without a group, with a literal pattern that is null or compiles, which version 0 of
+   * the regex pattern cost estimate treats as expensive (SPARK-60731).
    */
   private def cannotFail(e: Expression): Boolean = e match {
-    case r: StringRegexExpression => literalPatternCompiles(r) && cannotFail(r.left)
+    case r: Like => cannotFailPattern(r) && cannotFail(r.left)
+    case r: RLike => cannotFailPattern(r) && cannotFail(r.left)
     case _ if e.children.isEmpty => ExprUtils.canEvaluateUnconditionally(e)
     case _ => e.deterministic && ExprUtils.isTotalOperator(e) && e.children.forall(cannotFail)
   }
 
-  private def literalPatternCompiles(r: StringRegexExpression): Boolean = r.right match {
+  private def cannotFailPattern(r: StringRegexExpression): Boolean = r.right match {
+    // A null pattern makes the result null.
     case Literal(null, _) => true
     case Literal(pattern: UTF8String, _) =>
-      Try(Pattern.compile(r.escape(pattern.toString), r.collationRegexFlags)).isSuccess
+      // Java's regex engine recurses for every repetition of a quantified group, so a long input
+      // can overflow the stack. The patterns LIKE translates to have no group.
+      (r.isInstanceOf[Like] || !pattern.toString.contains('(')) &&
+        Try(Pattern.compile(r.escape(pattern.toString), r.collationRegexFlags)).isSuccess
     case _ => false
   }
 

@@ -3137,10 +3137,10 @@ class DataFrameSuite extends SharedSparkSession
 
   test("SPARK-60731: a condition that cannot fail written after the one that ends the split is " +
     "evaluated before it") {
-    // With regex aliases, which cannot fail and version 0 of the estimate treats as expensive,
-    // `g != j` needs every expensive alias not computed yet, so it ends the split, but `j` is
-    // still filtered on below it: the split computes f, then j, then g, in three projections,
-    // and returns the rows of the split off.
+    // With regex aliases without a group, which cannot fail and version 0 of the estimate treats
+    // as expensive, `g != j` needs every expensive alias not computed yet, so it ends the split,
+    // but `j` is still filtered on below it: the split computes f, then j, then g, in three
+    // projections, and returns the rows of the split off.
     def regexDf: DataFrame = spark.range(0, 100, 1, 1)
       .select($"id", $"id".cast("string") as "s")
       .select($"id", $"s".rlike("^[5-9]") as "f", $"s".rlike("^9") as "g",
