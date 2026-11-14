@@ -3298,7 +3298,8 @@ object PushPredicateThroughNonJoin extends Rule[LogicalPlan] with PredicateHelpe
    * Whether `e` cannot fail: `ExprUtils.canEvaluateUnconditionally`, also accepting LIKE and RLIKE
    * with a literal pattern of at most 100 characters (UTF-16 code units) that is null or compiles,
    * for RLIKE without `(`, `\` or `{`, which version 0 of the regex pattern cost estimate treats
-   * as expensive (SPARK-60731).
+   * as expensive (SPARK-60731). This is not `Expression.isTotal` of LIKE and RLIKE, which would
+   * also apply to the other rules reading it and promise more than not failing.
    */
   private def cannotFail(e: Expression): Boolean = e match {
     case r: Like => cannotFailPattern(r) && cannotFail(r.left)
