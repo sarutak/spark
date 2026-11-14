@@ -3135,6 +3135,35 @@ class DataFrameSuite extends SharedSparkSession
     }
   }
 
+  test("SPARK-60731: a condition that cannot fail written after the one that ends the split is " +
+    "evaluated before it") {
+    // `g + j >= 0` needs every expensive alias not computed yet, so it ends the split, but
+    // `j >= 80`, which cannot fail, is still filtered on below it, so g only runs on the 20 rows
+    // it keeps. In the second query, `u(j)`, a UDF that may fail, takes its place and stays above
+    // `g + j >= 0`, so g runs on the 50 rows `f >= 50` keeps.
+    val gCalls = sparkContext.longAccumulator("gCalls")
+    val f = udf((i: Long) => i)
+    val g = udf((i: Long) => {
+      gCalls.add(1)
+      i
+    })
+    val j = udf((i: Long) => i)
+    val u = udf((i: Long) => i >= 80)
+    def df: DataFrame = spark.range(0, 100, 1, 1)
+      .select($"id", f($"id") as "f", g($"id") as "g", j($"id") as "j")
+    val expected = (80L until 100L).map(i => Row(i, i, i, i))
+    Seq[(Column, Long)](($"j" >= 80, 20L), (u($"j"), 50L)).foreach { case (after, calls) =>
+      withSQLConf(
+        SQLConf.WHOLESTAGE_CODEGEN_ENABLED.key -> "false",
+        SQLConf.SPLIT_PROJECTION_FOR_EXPENSIVE_FILTERS.key -> "true") {
+        gCalls.reset()
+        val q = df.where($"f" >= 50 && $"g" + $"j" >= 0 && after)
+        assert(q.collect().toSeq === expected)
+        assert(gCalls.value === calls)
+      }
+    }
+  }
+
   test("SPARK-60633: a throwable filter condition is not pushed through an operator ahead of " +
     "its order") {
     def df: DataFrame = spark.range(0, 10, 1, 1).toDF()
