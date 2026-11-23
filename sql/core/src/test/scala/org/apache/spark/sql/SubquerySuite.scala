@@ -3834,6 +3834,14 @@ class SubquerySuite extends SharedSparkSession
         assert(df.queryExecution.optimizedPlan.collect { case j: Join => j.joinType } ==
           Seq(LeftOuter))
       }
+      // Also in a regular session, which runs ConvertToLocalRelation over the views, and keeps
+      // the top aggregate of a subquery with the count bug in OptimizeSubqueries.
+      withSQLConf(SQLConf.OPTIMIZER_EXCLUDED_RULES.key -> "") {
+        checkAnswer(sql("SELECT a1, (SELECT COUNT(*) FROM (SELECT MAX(b2) m FROM t2 " +
+          "WHERE t2.b1 = t1.a1) GROUP BY m) FROM t1"), Seq(Row(0, 1), Row(1, 1)))
+        checkAnswer(sql("SELECT a1, (SELECT 7 FROM (SELECT MAX(b2) m FROM t2 " +
+          "WHERE t2.b1 = t1.a1) GROUP BY m) FROM t1"), Seq(Row(0, 7), Row(1, 7)))
+      }
     }
   }
 
@@ -3844,7 +3852,8 @@ class SubquerySuite extends SharedSparkSession
       sql("CREATE TEMP VIEW t2(b1, b2) AS VALUES (0, 2), (0, 3)")
       // t1.a1 = 1 has no matching rows. Its value over no rows fails, so the result for it is
       // not computed before decorrelation, and the subquery keeps the handling and the results of
-      // before, also with a grouping key over that value. A COUNT(*) does not use that value, so
+      // before, also with a grouping key over that value, unlike the uncorrelated forms of these
+      // queries, which fail. A COUNT(*) does not use that value, so
       // its result is computed and correct. A regular session also runs ConvertToLocalRelation,
       // which the test session excludes, over the views.
       val legacyKey = SQLConf.LEGACY_SCALAR_SUBQUERY_NESTED_AGGREGATE_COUNT_BUG_BEHAVIOR.key
@@ -3900,7 +3909,7 @@ class SubquerySuite extends SharedSparkSession
         spark.udf.register("spark60501_rk",
           udf((_: Long) => scala.util.Random.nextInt(1000)).asNondeterministic())
         // Every key has one row in b, so COUNT(*) over its MAX is 1. The result is computed
-        // before decorrelation, without domain joins that would compute the random keys again,
+        // before decorrelation and needs no domain join, which computes the outer input again,
         // also for a non-deterministic CTE that is referenced twice, which is not inlined.
         val subquery = "(SELECT COUNT(*) FROM (SELECT MAX(b.v) FROM b WHERE b.k = o.kk))"
         checkAnswer(
@@ -3919,7 +3928,7 @@ class SubquerySuite extends SharedSparkSession
   }
 
   test("SPARK-60501: a result computed before decorrelation is used under the domain join that " +
-      "decorrelation adds anyway only where the domain join cannot make it wrong") {
+      "decorrelation adds anyway only where it cannot make a row worse than on master") {
     withTempView("b", "o") {
       spark.range(1000).selectExpr("id k", "id v").createOrReplaceTempView("b")
       withUserDefinedFunction("spark60501_rk" -> true) {
@@ -4012,9 +4021,10 @@ class SubquerySuite extends SharedSparkSession
   test("SPARK-60501: outer references that are not orderable get the fix") {
     withTempView("b") {
       spark.range(3).selectExpr("id k", "id v").createOrReplaceTempView("b")
-      // id = 3 has no matching rows. The domain joins of decorrelation would fail for the struct
-      // with a map field, the variant, a map, here in size(o.m) and in element_at(o.m, 0), and a
-      // calendar interval. The result computed before decorrelation needs no domain joins.
+      // id = 3 has no matching rows. The result computed before decorrelation needs no domain
+      // join, which fails for outer references that are not orderable, as for the struct with a
+      // map field, the variant, a map, here in size(o.m) and in element_at(o.m, 0), and a
+      // calendar interval.
       Seq("o.s.f" -> "SELECT named_struct('f', id, 'm', map(id, id)) s FROM range(4)",
           "CAST(o.x AS BIGINT)" -> "SELECT parse_json(CAST(id AS STRING)) x FROM range(4)",
           "size(o.m) - 1" -> ("SELECT map_from_arrays(sequence(0, CAST(id AS INT)), " +
@@ -4056,7 +4066,8 @@ class SubquerySuite extends SharedSparkSession
     withTempView("b", "sa", "spark60501_stream") {
       sql("CREATE TEMP VIEW b(k, v) AS VALUES (1, 100), (1, 200)")
       // k = 2 has no matching rows. The result computed before decorrelation needs no domain
-      // joins, which would aggregate the streaming outer query and outer join it back.
+      // join, which aggregates the outer query and outer joins it back, which fails in append and
+      // update mode.
       val input = MemoryStream[Int]
       input.toDF().toDF("k").createOrReplaceTempView("sa")
       val query = sql("SELECT sa.k, (SELECT COUNT(*) FROM (SELECT MAX(b.v) m FROM b " +

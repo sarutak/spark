@@ -258,6 +258,13 @@ class PullupCorrelatedPredicatesSuite extends PlanTest {
     }
     assert(subqueryWithOutputR(testRelation.select(ScalarSubquery(countOver(nonEquality))
       .as("sq"))).plan.exists(_.isInstanceOf[DomainJoin]))
+    // The result of master is not relied on when constant folding in such subqueries is not
+    // prevented, but the result of every outer row is.
+    withSQLConf(
+        SQLConf.DECORRELATE_SUBQUERY_PREVENT_CONSTANT_FOLDING_FOR_COUNT_BUG.key -> "false") {
+      assert(countBugResult(nonEquality, Seq(coalescedSum)).isEmpty)
+      assert(countBugResult(nonEquality) == Some("1"))
+    }
     // A user-defined aggregate function in a lower aggregate without GROUP BY can return a value
     // other than NULL on empty input, so the subquery keeps the handling of before: a Python
     // UDAF and a DSv2 function here, a Scala Aggregator in SubquerySuite. One in a grouped

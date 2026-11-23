@@ -45,7 +45,8 @@ from t1 order by a1;
 select a1, ( select sum(s) from (select coalesce(sum(b2), 10) s from t2 where t1.a1 = t2.b1) ) a
 from t1 order by a1;
 
--- with a filter between the aggregates
+-- with a filter between the aggregates, where the result for an outer row without matching rows
+-- is not computed before decorrelation, which keeps the wrong result of before
 select a1, ( select count(*) from (select max(b2) m from t2 where t1.a1 = t2.b1)
   where m is null ) a
 from t1 order by a1;
@@ -54,7 +55,9 @@ from t1 order by a1;
 select a1, ( select sum(s) from (select 10 s, max(b2) m from t2 where t1.a1 = t2.b1) ) a
 from t1 order by a1;
 
--- with a non-equality correlated predicate
+-- with a non-equality correlated predicate, for which decorrelation adds a domain join, and the
+-- result for an outer row without matching rows can differ per row, which keeps the wrong result
+-- of before
 select a1, ( select sum(s) from (select coalesce(sum(b2), 10) s from t2 where t2.b1 < t1.a1) ) a
 from t1 order by a1;
 
@@ -72,7 +75,7 @@ from t1 order by a1;
 select a1, ( select count(*) from (select max(b2) m from t2 where t1.a1 = t2.b1) group by m ) a
 from t1 order by a1;
 
--- with correlated predicates in both aggregates
+-- with correlated predicates in both aggregates, which keeps the wrong result of before
 select a1, ( select sum(s) from (select coalesce(sum(b2), 10) s from t2 where t1.a1 = t2.b1)
   where t1.a2 > 1 ) a
 from t1 order by a1;
@@ -84,7 +87,8 @@ from values (0), (1), (null) as t(a1) order by a1;
 select a1, ( select count(*) from (select max(b2) m from t2 where t1.a2 > 1) ) a
 from t1 order by a1;
 
--- with a join, a union, an intersect, a limit or a window function over the lower aggregates
+-- with a join, a union, an intersect, a limit or a window function over the lower aggregates,
+-- which keeps the wrong results of before
 select a1, ( select count(*) from (select max(b2) m from t2 where t1.a1 = t2.b1) l,
   (select min(b2) n from t2 where t1.a1 = t2.b1) r ) a
 from t1 order by a1;
@@ -111,8 +115,8 @@ from t1 order by a1;
 select a1, ( select count(*) from (select count(*) c from t2) where c > t1.a2 ) a
 from t1 order by a1;
 
--- with top aggregates over the one row of a lower aggregate that returns NULL on empty input,
--- such as SUM, COLLECT_LIST and COUNT(*), with FILTER, DISTINCT, decimal and bigint inputs
+-- with top aggregates such as SUM, COLLECT_LIST and COUNT(*) over the one row of a lower aggregate
+-- that returns NULL on empty input, with FILTER, DISTINCT, decimal and bigint inputs
 select a1, ( select collect_list(m) from (select max(b2) m from t2 where t1.a1 = t2.b1) ) a
 from t1 order by a1;
 
@@ -190,7 +194,8 @@ from t1 order by a1;
 -- function, over a lower MAX next to a COUNT and alone; a correlated one in its argument, over a
 -- lower MAX; a correlated one in a FILTER, over a lower MAX alone, next to a COUNT, and over an
 -- uncorrelated lower COUNT; an uncorrelated one in a FILTER, and a correlated one in a Project
--- between that a FILTER uses, over a lower MAX
+-- between that a FILTER uses, over a lower MAX. A correlated one in the argument or a FILTER over
+-- a lower MAX alone fails with INTERNAL_ERROR, as before (SPARK-61615)
 select a1, ( select sum(m) + (select max(c2) from t3) from (select max(b2) m, count(b2) c from t2
   where t1.a1 = t2.b1) ) a
 from t1 order by a1;
@@ -248,7 +253,8 @@ select a1, ( select coalesce(c, 10) from (select count(*) c from t2 where t1.a1 
 from t1 order by a1;
 
 -- with an expression that fails on the value of a lower aggregate over no rows: the result is
--- not computed for an outer row without matching rows, which keeps the result of before
+-- not computed for an outer row without matching rows, which keeps the result of before, unlike
+-- the uncorrelated form of the query, which fails
 select a1, ( select count(*) from (select 10 / coalesce(max(b2), 0) d from t2
   where t1.a1 = t2.b1) ) a
 from t1 where a1 = 0 order by a1;
@@ -275,7 +281,8 @@ select a1, ( select count(*) from (select 10 / coalesce(max(b2), 0) d from t2
   where t1.a1 = t2.b1) ) a
 from t1 order by a1;
 
--- with a grouping key that fails on the value over no rows, which keeps the result of before
+-- with a grouping key that fails on the value over no rows, which keeps the result of before,
+-- unlike the uncorrelated form of the query, which fails
 select a1, ( select count(*) from (select max(b2) m from t2 where t1.a1 = t2.b1)
   group by 10 / coalesce(m, 0) ) a
 from t1 order by a1;

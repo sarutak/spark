@@ -632,9 +632,10 @@ object PullupCorrelatedPredicates extends Rule[LogicalPlan] with PredicateHelper
         // The below logic controls handling count bug for scalar subqueries in
         // [[DecorrelateInnerQuery]], and if we don't handle it here, we handle it in
         // [[RewriteCorrelatedScalarSubquery#constructLeftJoins]]. Note that handling it in
-        // [[DecorrelateInnerQuery]] is correct where the outer input gives the same rows when computed
-        // again, and turning it off to handle it in constructLeftJoins is an optimization, so that
-        // additional, redundant left outer joins are not introduced.
+        // [[DecorrelateInnerQuery]] is correct where the outer input gives the same rows when
+        // computed again and its values that compare equal are the same, and turning it off to
+        // handle it in constructLeftJoins is an optimization, so that additional, redundant left
+        // outer joins are not introduced.
         val handleCountBug = conf.decorrelateInnerQueryEnabled &&
           !conf.getConf(SQLConf.LEGACY_SCALAR_SUBQUERY_COUNT_BUG_HANDLING)
         val handleCountBugInDecorrelate = handleCountBug && !(sub match {
@@ -691,16 +692,28 @@ object PullupCorrelatedPredicates extends Rule[LogicalPlan] with PredicateHelper
         // other value of outer values that compare equal, e.g. -0.0 and 0.0, which the domain
         // keeps one of. So under a domain join it is used only where it is the result of every
         // outer row, as for COUNT(*) over a MAX, whose top Aggregate reads nothing of the one row
-        // below it, or the same as master's result. A NULL result of a grouped top Aggregate is
-        // not used either: master gives such a row NULL too, as it returns no row for it.
-        lazy val countBugResultForEveryRow = sub match {
-          case agg: Aggregate => agg.groupingExpressions.isEmpty &&
-            agg.aggregateExpressions.forall(_.references.isEmpty)
+        // below it, or the same as master's result, so that no row gets worse than on master. The
+        // latter is computed from the decorrelated subquery before it is optimized, which keeps
+        // its top Aggregate as master's does with
+        // DECORRELATE_SUBQUERY_PREVENT_CONSTANT_FOLDING_FOR_COUNT_BUG, the default; without it,
+        // that result is not relied on.
+        //
+        // A NULL result of a grouped top Aggregate is not used, with or without a domain join: it
+        // gives the same result as master, which returns no row there, and leaves the plan of
+        // master, with mayHaveCountBug false.
+        lazy val groupedTop = sub match {
+          case agg: Aggregate => agg.groupingExpressions.nonEmpty
           case _ => false
         }
-        lazy val countBugResultAsOnMaster = {
+        lazy val countBugResultForEveryRow = sub match {
+          case agg: Aggregate =>
+            !groupedTop && agg.aggregateExpressions.forall(_.references.isEmpty)
+          case _ => false
+        }
+        lazy val countBugResultAsOnMaster =
+          conf.getConf(SQLConf.DECORRELATE_SUBQUERY_PREVENT_CONSTANT_FOLDING_FOR_COUNT_BUG) && {
           val onMaster = sub match {
-            case agg: Aggregate if agg.groupingExpressions.isEmpty =>
+            case _: Aggregate if !groupedTop =>
               RewriteCorrelatedScalarSubquery.evalSubqueryOnZeroTups(newPlan)
             case _ => None
           }
@@ -709,10 +722,6 @@ object PullupCorrelatedPredicates extends Rule[LogicalPlan] with PredicateHelper
             case (result, Some(l: Literal)) => result.semanticEquals(l)
             case _ => false
           }
-        }
-        lazy val groupedTop = sub match {
-          case agg: Aggregate => agg.groupingExpressions.nonEmpty
-          case _ => false
         }
         val countBugResult = if (mayHaveCountBugOld.isEmpty && computedCountBugResult.isDefined &&
             ((newPlan.exists(_.isInstanceOf[DomainJoin]) && !countBugResultForEveryRow &&
@@ -1029,16 +1038,17 @@ object RewriteCorrelatedScalarSubquery extends Rule[LogicalPlan] with AliasHelpe
    * input has no correlated Aggregate without grouping expressions, whose row decorrelation loses,
    * and if the domain joins that decorrelation adds there anyway, e.g. for a non-equality
    * correlation, have every outer row (they compute the outer input again, as on master;
-   * PullupCorrelatedPredicates uses the result under such domain joins only where that does not
-   * matter, see rewriteSubQueries). So for such an outer row the correlated input is taken as
-   * empty, and the chain is evaluated over it as before decorrelation: an Aggregate without
-   * grouping expressions returns one row on empty input, of the default results of its aggregate
-   * functions or NULL (see evalAggregateOnZeroTups; PullupCorrelatedPredicates does not call this
-   * for a user-defined aggregate function there, which can return another value). An outer
-   * reference in the chain does not change which rows it returns; a value or grouping key that
-   * depends on one is not a literal, and is not taken (see below). A NULL result is a NULL
-   * Literal, unlike in `evalSubqueryOnZeroTups`, since None here means that the result cannot be
-   * computed.
+   * PullupCorrelatedPredicates uses the result under such domain joins only where it cannot make a
+   * row worse than on master, see rewriteSubQueries). So for such an outer row the correlated
+   * input is taken as empty, and the chain is evaluated over it as before decorrelation: an
+   * Aggregate without grouping expressions returns one row on empty input, of the default results
+   * of its aggregate functions or NULL (see evalAggregateOnZeroTups; PullupCorrelatedPredicates
+   * does not call this for a user-defined aggregate function there, which can return another
+   * value). An outer reference in the chain does not change which rows it returns; a value or
+   * grouping key that depends on one is not a literal, and is not taken (see below). A NULL
+   * result is a NULL Literal, unlike in `evalSubqueryOnZeroTups`, since None here means that the
+   * result cannot be computed. Only a literal is taken, so this needs `tryEvalExpr` to keep a
+   * value that fails as an expression instead of failing the query (SPARK-61444).
    */
   private[optimizer] def evalSubqueryOnEmptyCorrelatedInput(
       plan: LogicalPlan): Option[Literal] = {
