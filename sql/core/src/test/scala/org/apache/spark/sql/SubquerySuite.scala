@@ -3799,7 +3799,7 @@ class SubquerySuite extends SharedSparkSession
             "WHERE t2.b1 = t1.a1 AND t2.b2 > 10))) FROM t1"),
           Seq(Row(1, 1), Row(2, 1)))
         // Results of top aggregates over a lower MAX, for which the result for an outer row
-        // without matching rows is computed before decorrelation (the routing is checked in
+        // without matching rows is computed before decorrelation (the result is checked in
         // PullupCorrelatedPredicatesSuite).
         checkAnswer(
           sql("SELECT a1, (SELECT COUNT(*) FROM (SELECT MAX(b2) m FROM t2 " +
@@ -3809,8 +3809,7 @@ class SubquerySuite extends SharedSparkSession
           sql("SELECT a1, (SELECT struct(SUM(m), COUNT(m), COLLECT_LIST(m)) FROM " +
             "(SELECT MAX(b2) m FROM t2 WHERE t2.b1 = t1.a1 AND t2.b2 > 10)) FROM t1"),
           Seq(Row(1, Row(null, 0, Seq())), Row(2, Row(null, 0, Seq()))))
-        // An uncorrelated lower COUNT returns the correct result, as before (the routing is
-        // checked in PullupCorrelatedPredicatesSuite).
+        // An uncorrelated lower COUNT returns the correct result, as before.
         checkAnswer(
           sql("SELECT a1, (SELECT COUNT(*) FROM (SELECT COUNT(*) c FROM t2 WHERE t2.b2 > 10) " +
             "WHERE c < t1.a2) FROM t1"),
@@ -3955,7 +3954,7 @@ class SubquerySuite extends SharedSparkSession
   }
 
   test("SPARK-60501: a non-deterministic filter above the subquery, a LIMIT in the outer input, " +
-      "outer inputs that give the same rows again and a LIMIT above the subquery") {
+      "other outer inputs and a LIMIT above the subquery") {
     withTempView("b", "o") {
       spark.range(1000).selectExpr("id k", "id v").createOrReplaceTempView("b")
       spark.range(1000).selectExpr("id k").createOrReplaceTempView("o")

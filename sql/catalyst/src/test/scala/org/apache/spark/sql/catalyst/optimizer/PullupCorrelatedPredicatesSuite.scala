@@ -136,17 +136,15 @@ class PullupCorrelatedPredicatesSuite extends PlanTest {
   // Returns ScalarSubquery.mayHaveCountBug, and whether DecorrelateInnerQuery handled the count
   // bug, which it does with a left outer domain join, for the aggregates `top` over `lower` (in
   // a struct if there are several, since a scalar subquery returns one column), in a Project
-  // over `outer` that also has the columns `others`, under the operators that `above` adds.
+  // over `outer`.
   private def countBugHandling(
       lower: LogicalPlan,
       top: Seq[Expression] = Seq(count(Literal(1))),
       grouping: Seq[Expression] = Nil,
-      outer: LogicalPlan = testRelation,
-      others: Seq[NamedExpression] = Nil,
-      above: LogicalPlan => LogicalPlan = identity): (Option[Boolean], Boolean) = {
+      outer: LogicalPlan = testRelation): (Option[Boolean], Boolean) = {
     val result = if (top.size == 1) top.head else CreateStruct(top)
     val subPlan = lower.groupBy(grouping: _*)(result.as("r"))
-    countBugHandlingIn(above(outer.select(others :+ ScalarSubquery(subPlan).as("sq"): _*)))
+    countBugHandlingIn(outer.select(ScalarSubquery(subPlan).as("sq")))
   }
 
   // The correlated scalar subquery with the output `r` in `query` after the rule, which also
@@ -338,6 +336,11 @@ class PullupCorrelatedPredicatesSuite extends PlanTest {
     assert(countBugResult(groupedBelow, Seq(count($"s"))) == Some("0"))
     assert(countBugHandling(lowerMax, grouping = Seq($"s")) == inConstructLeftJoins)
     assert(countBugResult(lowerMax, grouping = Seq($"s")) == Some("1"))
+    // A NULL result of a grouped top aggregate is not used: master gives NULL too, as the
+    // subquery returns no row there.
+    assert(countBugResult(lowerMax, Seq(max($"s")), Seq($"s")).isEmpty)
+    assert(countBugHandling(lowerMax, Seq(max($"s")), Seq($"s")) ==
+      asBefore(countBugHandling(lowerMax, Seq(max($"s")), Seq($"s"))))
     // COLLECT_LIST with RESPECT NULLS over the row of NULLs, with a FILTER that does not hold.
     assert(countBugResult(lowerMax,
       Seq(CollectList($"s", ignoreNulls = false).toAggregateExpression(false, Some($"s" > 1))))

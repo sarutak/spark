@@ -610,7 +610,7 @@ object PullupCorrelatedPredicates extends Rule[LogicalPlan] with PredicateHelper
         sub: LogicalPlan,
         outer: LogicalPlan,
         handleCountBug: Boolean = false): (LogicalPlan, Seq[Expression]) = {
-      if (SQLConf.get.decorrelateInnerQueryEnabled) {
+      if (conf.decorrelateInnerQueryEnabled) {
         DecorrelateInnerQuery(sub, outer, handleCountBug)
       } else {
         pullOutCorrelatedPredicates(sub, outer)
@@ -632,10 +632,10 @@ object PullupCorrelatedPredicates extends Rule[LogicalPlan] with PredicateHelper
         // The below logic controls handling count bug for scalar subqueries in
         // [[DecorrelateInnerQuery]], and if we don't handle it here, we handle it in
         // [[RewriteCorrelatedScalarSubquery#constructLeftJoins]]. Note that handling it in
-        // [[DecorrelateInnerQuery]] is always correct, and turning it off to handle it in
-        // constructLeftJoins is an optimization, so that additional, redundant left outer joins are
-        // not introduced.
-        val handleCountBug = SQLConf.get.decorrelateInnerQueryEnabled &&
+        // [[DecorrelateInnerQuery]] is correct where the outer input gives the same rows when computed
+        // again, and turning it off to handle it in constructLeftJoins is an optimization, so that
+        // additional, redundant left outer joins are not introduced.
+        val handleCountBug = conf.decorrelateInnerQueryEnabled &&
           !conf.getConf(SQLConf.LEGACY_SCALAR_SUBQUERY_COUNT_BUG_HANDLING)
         val handleCountBugInDecorrelate = handleCountBug && !(sub match {
           // Handle count bug only if there exists lower level Aggs with count bugs. It does not
@@ -691,7 +691,8 @@ object PullupCorrelatedPredicates extends Rule[LogicalPlan] with PredicateHelper
         // other value of outer values that compare equal, e.g. -0.0 and 0.0, which the domain
         // keeps one of. So under a domain join it is used only where it is the result of every
         // outer row, as for COUNT(*) over a MAX, whose top Aggregate reads nothing of the one row
-        // below it, or the same as master's result.
+        // below it, or the same as master's result. A NULL result of a grouped top Aggregate is
+        // not used either: master gives such a row NULL too, as it returns no row for it.
         lazy val countBugResultForEveryRow = sub match {
           case agg: Aggregate => agg.groupingExpressions.isEmpty &&
             agg.aggregateExpressions.forall(_.references.isEmpty)
@@ -709,9 +710,14 @@ object PullupCorrelatedPredicates extends Rule[LogicalPlan] with PredicateHelper
             case _ => false
           }
         }
+        lazy val groupedTop = sub match {
+          case agg: Aggregate => agg.groupingExpressions.nonEmpty
+          case _ => false
+        }
         val countBugResult = if (mayHaveCountBugOld.isEmpty && computedCountBugResult.isDefined &&
-            newPlan.exists(_.isInstanceOf[DomainJoin]) && !countBugResultForEveryRow &&
-            !countBugResultAsOnMaster) {
+            ((newPlan.exists(_.isInstanceOf[DomainJoin]) && !countBugResultForEveryRow &&
+              !countBugResultAsOnMaster) ||
+              (groupedTop && computedCountBugResult.exists(_.value == null)))) {
           None
         } else {
           computedCountBugResult

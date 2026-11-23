@@ -111,9 +111,8 @@ from t1 order by a1;
 select a1, ( select count(*) from (select count(*) c from t2) where c > t1.a2 ) a
 from t1 order by a1;
 
--- with top aggregates over the one row of a lower aggregate that returns NULL on empty input:
--- functions that return over a NULL row what they return over no rows, such as SUM and
--- COLLECT_LIST, and others, such as COUNT(*), with FILTER, DISTINCT, decimal and bigint inputs
+-- with top aggregates over the one row of a lower aggregate that returns NULL on empty input,
+-- such as SUM, COLLECT_LIST and COUNT(*), with FILTER, DISTINCT, decimal and bigint inputs
 select a1, ( select collect_list(m) from (select max(b2) m from t2 where t1.a1 = t2.b1) ) a
 from t1 order by a1;
 
@@ -152,7 +151,8 @@ select a1, ( select struct(sum(m) filter (where m > 2), sum(m) filter (where m >
   from (select max(b2) m from t2 where t1.a1 = t2.b1) ) a
 from t1 order by a1;
 
--- a FILTER condition that fails on the NULL row keeps the result of before
+-- a FILTER condition that fails on the NULL row keeps the result of before, unlike the LATERAL
+-- and uncorrelated forms of the query, which fail
 select a1, ( select sum(m) filter (where 10 / coalesce(m, 0) > 1) from (select max(b2) m from t2
   where t1.a1 = t2.b1) ) a
 from t1 order by a1;
@@ -224,7 +224,7 @@ select a1, ( select count(*) filter (where (select max(c2) from t3 where t3.c2 =
   from (select count(*) c from t2) where c > t1.a2 ) a
 from t1 order by a1;
 
--- with a grouped top aggregate, a function not in the list, and three levels
+-- with a grouped top aggregate, another top aggregate function, and three levels
 select a1, ( select collect_list(m) from (select max(b2) m from t2 where t1.a1 = t2.b1)
   group by m ) a
 from t1 order by a1;
@@ -326,8 +326,8 @@ select a1, ( select collect_list(struct(m)) from
   (select max(b2) m from t2 where t1.a1 = t2.b1) ) a
 from t1 order by a1;
 
--- with the legacy behavior, which handles the count bug in decorrelation only if a lower
--- aggregate without GROUP BY has a function with a default result, such as COUNT
+-- with the legacy behavior, which does not compute the result for an outer row without matching
+-- rows before decorrelation
 set spark.sql.legacy.scalarSubqueryNestedAggregateCountBugBehavior=true;
 
 select a1, ( select count(*) from (select max(b2) m from t2 where t1.a1 = t2.b1) ) a
