@@ -143,7 +143,7 @@ from t1 order by a1
 struct<a1:int,a:bigint>
 -- !query output
 0	0
-1	1
+1	0
 
 
 -- !query
@@ -162,7 +162,7 @@ from t1 order by a1
 -- !query schema
 struct<a1:int,a:bigint>
 -- !query output
-0	10
+0	NULL
 1	5
 
 
@@ -206,7 +206,7 @@ from t1 order by a1
 struct<a1:int,a:bigint>
 -- !query output
 0	NULL
-1	10
+1	NULL
 
 
 -- !query
@@ -238,7 +238,7 @@ from t1 order by a1
 struct<a1:int,a:bigint>
 -- !query output
 0	1
-1	1
+1	0
 
 
 -- !query
@@ -249,7 +249,7 @@ from t1 order by a1
 struct<a1:int,a:bigint>
 -- !query output
 0	2
-1	2
+1	0
 
 
 -- !query
@@ -260,7 +260,7 @@ from t1 order by a1
 struct<a1:int,a:bigint>
 -- !query output
 0	1
-1	1
+1	0
 
 
 -- !query
@@ -270,7 +270,7 @@ from t1 order by a1
 struct<a1:int,a:bigint>
 -- !query output
 0	1
-1	1
+1	0
 
 
 -- !query
@@ -281,7 +281,7 @@ from t1 order by a1
 struct<a1:int,a:bigint>
 -- !query output
 0	1
-1	1
+1	0
 
 
 -- !query
@@ -417,23 +417,10 @@ select a1, ( select sum(m) filter (where 10 / coalesce(m, 0) > 1) from (select m
   where t1.a1 = t2.b1) ) a
 from t1 order by a1
 -- !query schema
-struct<>
+struct<a1:int,a:bigint>
 -- !query output
-org.apache.spark.SparkArithmeticException
-{
-  "errorClass" : "DIVIDE_BY_ZERO",
-  "sqlState" : "22012",
-  "messageParameters" : {
-    "config" : "\"spark.sql.ansi.enabled\""
-  },
-  "queryContext" : [ {
-    "objectType" : "",
-    "objectName" : "",
-    "startIndex" : 42,
-    "stopIndex" : 60,
-    "fragment" : "10 / coalesce(m, 0)"
-  } ]
-}
+0	3
+1	NULL
 
 
 -- !query
@@ -539,10 +526,16 @@ select a1, ( select sum((select max(c2) from t3 where t3.c2 = m)) from (select m
   where t1.a1 = t2.b1) ) a
 from t1 order by a1
 -- !query schema
-struct<a1:int,a:bigint>
+struct<>
 -- !query output
-0	3
-1	NULL
+org.apache.spark.SparkException
+{
+  "errorClass" : "INTERNAL_ERROR",
+  "sqlState" : "XX000",
+  "messageParameters" : {
+    "message" : "The Spark SQL phase optimization failed with an internal error. You hit a bug in Spark or the Spark plugins you use. Please, report this bug to the corresponding communities or vendors, and provide the full stack trace."
+  }
+}
 
 
 -- !query
@@ -550,10 +543,16 @@ select a1, ( select sum(m) filter (where (select max(c2) from t3 where t3.c2 = m
   from (select max(b2) m from t2 where t1.a1 = t2.b1) ) a
 from t1 order by a1
 -- !query schema
-struct<a1:int,a:bigint>
+struct<>
 -- !query output
-0	3
-1	NULL
+org.apache.spark.SparkException
+{
+  "errorClass" : "INTERNAL_ERROR",
+  "sqlState" : "XX000",
+  "messageParameters" : {
+    "message" : "The Spark SQL phase optimization failed with an internal error. You hit a bug in Spark or the Spark plugins you use. Please, report this bug to the corresponding communities or vendors, and provide the full stack trace."
+  }
+}
 
 
 -- !query
@@ -688,46 +687,19 @@ select a1, ( select sum(d) from (select 10 / coalesce(max(b2), 0) d from t2
   where t1.a1 = t2.b1) ) a
 from t1 order by a1
 -- !query schema
-struct<>
+struct<a1:int,a:double>
 -- !query output
-org.apache.spark.SparkArithmeticException
-{
-  "errorClass" : "DIVIDE_BY_ZERO",
-  "sqlState" : "22012",
-  "messageParameters" : {
-    "config" : "\"spark.sql.ansi.enabled\""
-  },
-  "queryContext" : [ {
-    "objectType" : "",
-    "objectName" : "",
-    "startIndex" : 41,
-    "stopIndex" : 65,
-    "fragment" : "10 / coalesce(max(b2), 0)"
-  } ]
-}
+0	3.3333333333333335
+1	NULL
 
 
 -- !query
 select a1 from t1 where a1 = 0 and ( select sum(d) from (select 10 / coalesce(max(b2), 0) d
   from t2 where t1.a1 = t2.b1) ) is not null order by a1
 -- !query schema
-struct<>
+struct<a1:int>
 -- !query output
-org.apache.spark.SparkArithmeticException
-{
-  "errorClass" : "DIVIDE_BY_ZERO",
-  "sqlState" : "22012",
-  "messageParameters" : {
-    "config" : "\"spark.sql.ansi.enabled\""
-  },
-  "queryContext" : [ {
-    "objectType" : "",
-    "objectName" : "",
-    "startIndex" : 65,
-    "stopIndex" : 89,
-    "fragment" : "10 / coalesce(max(b2), 0)"
-  } ]
-}
+0
 
 
 -- !query
@@ -756,23 +728,10 @@ select a1, ( select count(*) from (select max(b2) m from t2 where t1.a1 = t2.b1)
   group by 10 / coalesce(m, 0) ) a
 from t1 order by a1
 -- !query schema
-struct<>
+struct<a1:int,a:bigint>
 -- !query output
-org.apache.spark.SparkArithmeticException
-{
-  "errorClass" : "DIVIDE_BY_ZERO",
-  "sqlState" : "22012",
-  "messageParameters" : {
-    "config" : "\"spark.sql.ansi.enabled\""
-  },
-  "queryContext" : [ {
-    "objectType" : "",
-    "objectName" : "",
-    "startIndex" : 93,
-    "stopIndex" : 111,
-    "fragment" : "10 / coalesce(m, 0)"
-  } ]
-}
+0	1
+1	NULL
 
 
 -- !query

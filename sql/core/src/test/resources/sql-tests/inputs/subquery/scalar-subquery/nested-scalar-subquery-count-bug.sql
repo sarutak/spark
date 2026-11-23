@@ -152,8 +152,7 @@ select a1, ( select struct(sum(m) filter (where m > 2), sum(m) filter (where m >
   from (select max(b2) m from t2 where t1.a1 = t2.b1) ) a
 from t1 order by a1;
 
--- a FILTER condition that fails on the NULL row fails for it, as in the LATERAL and uncorrelated
--- forms of the query
+-- a FILTER condition that fails on the NULL row keeps the result of before
 select a1, ( select sum(m) filter (where 10 / coalesce(m, 0) > 1) from (select max(b2) m from t2
   where t1.a1 = t2.b1) ) a
 from t1 order by a1;
@@ -248,11 +247,8 @@ from t1 order by a1;
 select a1, ( select coalesce(c, 10) from (select count(*) c from t2 where t1.a1 = t2.b1) ) a
 from t1 order by a1;
 
--- with an expression that fails on the value of a lower aggregate over no rows, which is
--- evaluated only for an outer row without matching rows. Of these five queries, up to the CAST
--- query, every outer row matches in the first two and the CAST query, which return results; the
--- query over every row of t1 and the next one fail at runtime when the value for a1 = 1 is
--- computed.
+-- with an expression that fails on the value of a lower aggregate over no rows: the result is
+-- not computed for an outer row without matching rows, which keeps the result of before
 select a1, ( select count(*) from (select 10 / coalesce(max(b2), 0) d from t2
   where t1.a1 = t2.b1) ) a
 from t1 where a1 = 0 order by a1;
@@ -265,8 +261,7 @@ select a1, ( select sum(d) from (select 10 / coalesce(max(b2), 0) d from t2
   where t1.a1 = t2.b1) ) a
 from t1 order by a1;
 
--- the expression is also evaluated for an outer row that another condition of the same WHERE
--- removes
+-- with another condition of the same WHERE
 select a1 from t1 where a1 = 0 and ( select sum(d) from (select 10 / coalesce(max(b2), 0) d
   from t2 where t1.a1 = t2.b1) ) is not null order by a1;
 
@@ -275,13 +270,12 @@ select a1, ( select sum(d) from (select cast(coalesce(max(cast(b2 as string)), '
   from t2 where t1.a1 = t2.b1) ) a
 from t1 where a1 = 0 order by a1;
 
--- a COUNT(*) does not use the expression, so it is not evaluated for any outer row
+-- a COUNT(*) does not use the expression, so its result is computed
 select a1, ( select count(*) from (select 10 / coalesce(max(b2), 0) d from t2
   where t1.a1 = t2.b1) ) a
 from t1 order by a1;
 
--- with a grouping key that fails on the value over no rows, which fails at runtime for the outer
--- row without matching rows, as in the LATERAL form
+-- with a grouping key that fails on the value over no rows, which keeps the result of before
 select a1, ( select count(*) from (select max(b2) m from t2 where t1.a1 = t2.b1)
   group by 10 / coalesce(m, 0) ) a
 from t1 order by a1;
