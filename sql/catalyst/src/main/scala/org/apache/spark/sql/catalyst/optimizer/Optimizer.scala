@@ -2448,19 +2448,23 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
     _.containsAnyPattern(FILTER, JOIN, AS_OF_JOIN)) {
     // The new filters go ahead of the condition, or, with
     // `spark.sql.optimizer.evaluateNotNullChecksInOrder`, each just before the first conjunct at
-    // which the conjuncts so far imply it, see `withInferredPredicates`. Either way, one over a
-    // column that can fail (see `failableOutput`) would compute that column on rows that the
-    // conjuncts after it drop, so such a column gets none.
+    // which the conjuncts so far imply it, see `withInferredPredicates`. Ahead of the condition,
+    // one over a column that can fail (see `failableOutput`) would compute that column on rows
+    // that the conjuncts after it drop. So such a column gets only `isnotnull`, and always just
+    // before that conjunct, which a conjunct reading the column is or precedes, so that it does
+    // not compute the column any earlier. With it, the filter reads the column twice, so that
+    // it stays above a `Project` that computes the column, which then evaluates an expensive
+    // expression of the column, e.g. a UDF, only once (SPARK-62394).
     case filter @ Filter(condition, child) =>
       val canAdd: Expression => Boolean =
         if (filter.getTagValue(asOfInputFilterTag).isDefined) canBeAsOfFilter else canBeFilter
       lazy val failable = failableOutput(child)
-      val newFilters = (filter.constraints --
-        (child.constraints ++ splitConjunctivePredicates(condition))).toSeq.filter { c =>
-          canAdd(c) && !c.references.exists(failable.contains)
-        }
-      if (newFilters.nonEmpty) {
-        Filter(withInferredPredicates(newFilters, condition, child), child)
+      val (newFilters, overFailable) = (filter.constraints --
+        (child.constraints ++ splitConjunctivePredicates(condition))).toSeq.filter(canAdd)
+        .partition(c => !c.references.exists(failable.contains))
+      val inOrder = overFailable.filter(_.isInstanceOf[IsNotNull])
+      if (newFilters.nonEmpty || inOrder.nonEmpty) {
+        Filter(withInferredPredicates(newFilters, inOrder, condition, child), child)
       } else {
         filter
       }
@@ -2519,14 +2523,15 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
   }
 
   /**
-   * Adds the predicates inferred from the conjuncts of `condition` to it: at the front, or, with
-   * `spark.sql.optimizer.evaluateNotNullChecksInOrder`, each just before the first conjunct at
-   * which the conjuncts so far, with the constraints of `child`, imply it, so that evaluating the
-   * condition in its order does not evaluate it before the conjuncts that precede that one, whose
-   * errors it would hide, e.g. `isnotnull(x)` from `x > 0` in `y + 1 > 0 AND x > 0`. With
-   * whole-stage codegen, a check is still generated before the first conjunct that references its
-   * column, see `GeneratePredicateHelper.precedingNotNullChecks`, so for `coalesce(x, 1) + y > 0
-   * AND x > 0` only the order of the plan changes. The constraints are assumed to only grow with
+   * Adds the predicates inferred from the conjuncts of `condition` to it: `inferred` at the
+   * front, and `inOrder` each just before the first conjunct at which the conjuncts so far, with
+   * the constraints of `child`, imply it. With `spark.sql.optimizer.evaluateNotNullChecksInOrder`,
+   * `inferred` is placed in the same way, so that evaluating the condition in its order does not
+   * evaluate it before the conjuncts that precede that one, whose errors it would hide, e.g.
+   * `isnotnull(x)` from `x > 0` in `y + 1 > 0 AND x > 0`. With whole-stage codegen, a check is
+   * still generated before the first conjunct that references its column, see
+   * `GeneratePredicateHelper.precedingNotNullChecks`, so for `coalesce(x, 1) + y > 0 AND x > 0`
+   * only the order of the plan changes. The constraints are assumed to only grow with
    * the prefix, so the first implying prefix of each predicate is found by a search that doubles
    * the prefix until it implies the predicate, then halves the last range; the constraints of each
    * prefix are computed once. If a longer prefix lost a constraint, a predicate would only be
@@ -2535,9 +2540,12 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
    */
   private def withInferredPredicates(
       inferred: Seq[Expression],
+      inOrder: Seq[Expression],
       condition: Expression,
       child: LogicalPlan): Expression = {
-    if (conf.evaluateNotNullChecksInOrder) {
+    val (ahead, toPlace) =
+      if (conf.evaluateNotNullChecksInOrder) (Nil, inferred ++ inOrder) else (inferred, inOrder)
+    val placedCondition = if (toPlace.isEmpty) condition else {
       val conjuncts = splitConjunctivePredicates(condition)
       val implied = mutable.HashMap.empty[Int, ExpressionSet]
       def impliedBy(k: Int): ExpressionSet = implied.getOrElseUpdate(k,
@@ -2557,7 +2565,7 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
       // The whole condition implies every inferred predicate, since they come from the
       // constraints of the filter, so the last range ends at the last conjunct.
       val last = conjuncts.length - 1
-      var remaining = inferred
+      var remaining = toPlace
       var lo = 0
       var hi = 0
       while (remaining.nonEmpty) {
@@ -2569,9 +2577,8 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
         hi = math.min(2 * hi + 1, last)
       }
       buildBalancedPredicate(conjuncts.zip(placed).flatMap { case (c, ps) => ps :+ c }, And)
-    } else {
-      And(inferred.reduce(And), condition)
     }
+    if (ahead.isEmpty) placedCondition else And(ahead.reduce(And), placedCondition)
   }
 
   private def getAllConstraints(

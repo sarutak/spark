@@ -529,16 +529,21 @@ class InferFiltersFromConstraintsSuite extends PlanTest {
     // `i` can fail as the cast does, and `j` as it reads `i`, also through the sample, the
     // projection and the filter above them. So no constraint over either, e.g. `i > 0` from
     // `i = k AND k > 0`, goes ahead of the condition, while one over the non-deterministic `r`,
-    // which is computed on every row, does.
+    // which is computed on every row, does. `isnotnull(i)` goes just before `i = k`, which
+    // computes `i` anyway (SPARK-62394).
     val projected = LocalRelation($"s".string, $"k".int)
       .select($"k", Cast($"s", IntegerType, evalMode = EvalMode.ANSI).as("i"),
         (Rand(1) * $"k").as("r"))
       .sample(0.0, 0.5, withReplacement = false, 1L)
       .select($"k", $"i", IsNull($"i").as("j"), $"r")
     val condition = $"i" === $"k" && $"k" > 0 && $"j" && $"r" > 0.5
-    comparePlans(
-      InferFiltersFromConstraints(projected.where($"k" > 1).where(condition).analyze),
-      projected.where(IsNotNull($"k") && $"k" > 1).where(IsNotNull($"r") && condition).analyze)
+    val optimized = InferFiltersFromConstraints(projected.where($"k" > 1).where(condition).analyze)
+    comparePlans(optimized, projected.where(IsNotNull($"k") && $"k" > 1)
+      .where(IsNotNull($"r") && IsNotNull($"i") && condition).analyze)
+    val Filter(optimizedCondition, _) = optimized
+    val Seq(i, k, j, r) = Seq("i", "k", "j", "r").map(n => optimized.output.find(_.name == n).get)
+    assert(splitConjunctivePredicates(optimizedCondition).map(_.canonicalized) ===
+      Seq(IsNotNull(r), IsNotNull(i), i === k, k > 0, j, r > 0.5).map(_.canonicalized))
   }
 
   test("SPARK-61921: a constraint over a column that can fail through a sort, a limit, an " +
@@ -547,6 +552,7 @@ class InferFiltersFromConstraintsSuite extends PlanTest {
     // and so can the aggregate result `c`. So no constraint over either, e.g. `i > 0` from
     // `i = k AND k > 0`, goes ahead of the condition, while one over `g`, a grouping key, `m`, an
     // aggregate function, or `f`, a non-deterministic result computed for every group, does.
+    // `isnotnull(i)` and `isnotnull(c)` go just before `i = k` and `c = m` (SPARK-62394).
     val left = LocalRelation($"s".string, $"k".int)
       .select($"k", Cast($"s", IntegerType, evalMode = EvalMode.ANSI).as("i"))
       .orderBy($"k".asc)
@@ -562,7 +568,37 @@ class InferFiltersFromConstraintsSuite extends PlanTest {
     comparePlans(
       InferFiltersFromConstraints(joined.where(condition).analyze),
       joined.where(IsNotNull($"k") && IsNotNull($"m") && IsNotNull($"f") && IsNotNull($"g") &&
-        condition).analyze)
+        IsNotNull($"i") && IsNotNull($"c") && condition).analyze)
+  }
+
+  test("SPARK-62394: an inferred IsNotNull check over a column that can fail goes just before " +
+      "the first conjunct at which the conjuncts so far imply it") {
+    // `i` can fail as the cast does.
+    val projected = LocalRelation($"s".string, $"k".int)
+      .select($"k", Cast($"s", IntegerType, evalMode = EvalMode.ANSI).as("i"))
+    val Seq(k, i) = projected.analyze.output
+    def conjuncts(condition: Expression, inOrder: Boolean): Seq[Expression] = {
+      withSQLConf(SQLConf.EVALUATE_NOT_NULL_CHECKS_IN_ORDER.key -> inOrder.toString) {
+        val Filter(optimized, _) = InferFiltersFromConstraints(projected.where(condition).analyze)
+        splitConjunctivePredicates(optimized).map(_.canonicalized)
+      }
+    }
+    // Whatever `evaluateNotNullChecksInOrder` is. `isnotnull(k)` goes before the first conjunct
+    // either way.
+    for (inOrder <- Seq(false, true)) {
+      withClue(s"inOrder=$inOrder: ") {
+        // After the conjuncts before the first one on `i`, which drop rows first.
+        assert(conjuncts(k > 0 && k + 1 > 0 && i === k, inOrder) ===
+          Seq(IsNotNull(k), k > 0, k + 1 > 0, IsNotNull(i), i === k).map(_.canonicalized))
+        // `coalesce(i, 0) > k` reads `i` first, but only `i > 1` implies `isnotnull(i)`.
+        assert(conjuncts(Coalesce(Seq(i, 0)) > k && k > 0 && i > 1, inOrder) ===
+          Seq(IsNotNull(k), Coalesce(Seq(i, 0)) > k, k > 0, IsNotNull(i), i > 1)
+            .map(_.canonicalized))
+        // No other constraint over `i`, e.g. `i > 0` from `i = k AND k > 0`.
+        assert(conjuncts(i === k && k > 0, inOrder) ===
+          Seq(IsNotNull(k), IsNotNull(i), i === k, k > 0).map(_.canonicalized))
+      }
+    }
   }
 
   test("SPARK-36978: IsNotNull constraints on structs should apply at the member field " +

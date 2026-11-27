@@ -1357,4 +1357,37 @@ class UDFSuite extends SharedSparkSession {
     assert(code.nonEmpty && code.forall(!_.contains("fieldName")))
     checkAnswer(df, Row(1) :: Row(1) :: Nil)
   }
+
+  test("SPARK-62394: A filter on the result of a Scala UDF over a scan evaluates it once") {
+    withSQLConf(SQLConf.ADAPTIVE_EXECUTION_ENABLED.key -> "false") {
+      val calls = spark.sparkContext.longAccumulator("calls")
+      // A nullable result, as `udf` wraps a primitive argument in a null check.
+      val f = udf { (i: Long) =>
+        calls.add(1)
+        i - 1
+      }
+      withTempPath { dir =>
+        val path = dir.getCanonicalPath
+        spark.range(0, 10, 1, 1).write.parquet(path)
+        def scan: DataFrame = spark.read.parquet(path)
+        for (v1 <- Seq("parquet", ""); codegen <- Seq("true", "false")) {
+          withSQLConf(SQLConf.USE_V1_SOURCE_LIST.key -> v1,
+              SQLConf.WHOLESTAGE_CODEGEN_ENABLED.key -> codegen) {
+            withClue(s"v1=${v1.nonEmpty}, codegen=$codegen: ") {
+              def check(df: DataFrame, numRows: Int, numCalls: Int): Unit = {
+                calls.reset()
+                assert(df.collect().length == numRows)
+                assert(calls.value == numCalls)
+              }
+              // The filter stays above the projection, which evaluates `u` once per row.
+              check(scan.select($"id", f($"id").as("u")).where($"u" >= 0), 9, 10)
+              // `id > 2` is pushed below the projection, which evaluates `u` for its 7 rows.
+              check(scan.select($"id", f($"id").as("u"), ($"id" + 1).as("v"))
+                .where($"id" > 2 && $"u" >= 5), 4, 7)
+            }
+          }
+        }
+      }
+    }
+  }
 }
