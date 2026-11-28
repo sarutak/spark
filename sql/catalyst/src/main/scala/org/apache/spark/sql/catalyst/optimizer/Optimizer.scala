@@ -2456,8 +2456,9 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
     // above a `Project` that computes the column with an expensive expression, e.g. a UDF, which
     // is then evaluated only once. The `isnotnull` always goes just before the first conjunct at
     // which the conjuncts so far imply it, whatever the configuration, which is never before the
-    // first conjunct that reads the column, as a constraint of `child` is not added. The filter
-    // above the `Project` then computes the column for every row that reaches that conjunct,
+    // first conjunct that reads the column, as a constraint of `child` is not added. With
+    // whole-stage codegen, the filter above the `Project` then computes the column for every row
+    // that reaches that conjunct (without it, the `Project` computes it on every row it gets),
     // while a filter in-lined below it computes the column only where that conjunct evaluates
     // it, so the `isnotnull` is added only if that conjunct evaluates the column on every row it
     // is evaluated on (see `evaluatesOnEveryRow`).
@@ -2475,7 +2476,7 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
         case _ => false
       }
       if (newFilters.nonEmpty || inOrder.nonEmpty) {
-        Filter(withInferredPredicates(newFilters, inOrder, condition, child), child)
+        Filter(withInferredPredicates(newFilters, inOrder, condition, conjuncts, child), child)
       } else {
         filter
       }
@@ -2547,17 +2548,17 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
    * the prefix until it implies the predicate, then halves the last range; the constraints of each
    * prefix are computed once. If a longer prefix lost a constraint, a predicate would only be
    * placed later. The prefixes and the condition are built as balanced trees, as the parser builds
-   * a long chain of `AND`.
+   * a long chain of `AND`. `conjuncts` are those of `condition`.
    */
   private def withInferredPredicates(
       inferred: Seq[Expression],
       inOrder: Seq[Expression],
       condition: Expression,
+      conjuncts: Seq[Expression],
       child: LogicalPlan): Expression = {
     val (ahead, toPlace) =
       if (conf.evaluateNotNullChecksInOrder) (Nil, inferred ++ inOrder) else (inferred, inOrder)
     val placedCondition = if (toPlace.isEmpty) condition else {
-      val conjuncts = splitConjunctivePredicates(condition)
       val implied = mutable.HashMap.empty[Int, ExpressionSet]
       def impliedBy(k: Int): ExpressionSet = implied.getOrElseUpdate(k,
         Filter(buildBalancedPredicate(conjuncts.take(k + 1), And), child).constraints)
@@ -2595,17 +2596,17 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
   /**
    * Whether evaluating `e` evaluates `a` whenever it is evaluated. Only expressions whose order of
    * evaluating their children is known count: unary ones that evaluate their child, comparisons
-   * and arithmetic that evaluate the left side and skip the right one when the left one is NULL,
-   * and division and modulo, which evaluate the right side and may skip the left one. Any other
-   * expression, e.g. `CaseWhen`, `Coalesce`, `And` or a UDF, does not count, even if it evaluates
-   * the column. For example, `u > 0`, `0 < u` and `k / u > 0` evaluate `u`, but
-   * `when(x > 5, x) + u > 0` does not on a row where `x` is at most 5, nor `u / k > 0` on a row
-   * where `k` is NULL.
+   * and arithmetic that evaluate the left side and, except `<=>`, skip the right one when the
+   * left one is NULL, and division and modulo, which evaluate the right side and may skip the
+   * left one. Any other expression, e.g. `CaseWhen`, `Coalesce`, `And` or a UDF, does not count,
+   * even if it evaluates the column. For example, `u > 0`, `0 < u` and `k / u > 0` evaluate `u`,
+   * but `when(x > 5, x) + u > 0` does not on a row where `x` is at most 5, nor `u / k > 0` on a
+   * row where `k` is NULL, or 0 without ANSI mode.
    */
   private def evaluatesOnEveryRow(e: Expression, a: Attribute): Boolean = e match {
     case r: Attribute => r.semanticEquals(a)
-    case u @ (_: Cast | _: UnaryMinus | _: UnaryPositive | _: Abs | _: Not | _: IsNull |
-        _: IsNotNull | _: GetStructField) =>
+    case u @ (_: Cast | _: UnaryMinus | _: Abs | _: Not | _: IsNull | _: IsNotNull |
+        _: GetStructField) =>
       evaluatesOnEveryRow(u.children.head, a)
     case b @ (_: BinaryComparison | _: Add | _: Subtract | _: Multiply | _: BitwiseAnd |
         _: BitwiseOr | _: BitwiseXor) =>

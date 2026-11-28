@@ -526,7 +526,7 @@ class InferFiltersFromConstraintsSuite extends PlanTest {
   }
 
   test("SPARK-61823: no constraint but IsNotNull over a column that can fail is inferred as " +
-      "a filter") {
+    "a filter") {
     // `i` can fail as the cast does, and `j` as it reads `i`, also through the sample, the
     // projection and the filter above them. So no constraint over either, e.g. `i > 0` from
     // `i = k AND k > 0`, goes ahead of the condition, while one over the non-deterministic `r`,
@@ -616,8 +616,20 @@ class InferFiltersFromConstraintsSuite extends PlanTest {
         // A unary expression evaluates its child.
         assert(conjuncts(Abs(i) > 1, inOrder) ===
           Seq(IsNotNull(i), Abs(i) > 1).map(_.canonicalized))
+        // A comparison evaluates its right side if the left one is never NULL.
+        assert(conjuncts(Literal(1) < i && k > 0, inOrder) === (if (inOrder) {
+          Seq(IsNotNull(i), Literal(1) < i, IsNotNull(k), k > 0)
+        } else {
+          Seq(IsNotNull(k), IsNotNull(i), Literal(1) < i, k > 0)
+        }).map(_.canonicalized))
+        // Each of the other listed expressions evaluates `i` where it reads it.
+        Seq(Cast(i, LongType) > 1L, UnaryMinus(i) > 1, Not(i > 1), i - k > 1, i * k > 1,
+            BitwiseAnd(i, k) > 1, BitwiseOr(i, k) > 1, BitwiseXor(i, k) > 1,
+            IntegralDivide(Cast(k, LongType), Cast(i, LongType)) > 1L).foreach { c =>
+          assert(conjuncts(c, inOrder).contains(IsNotNull(i).canonicalized), c)
+        }
         // Modulo evaluates its right side first and skips the left one when the right one is
-        // NULL, so it evaluates `i` only on the right side.
+        // NULL, so only `i` on the right side counts.
         val iLeftMod = Remainder(i, k) > 0
         assert(conjuncts(iLeftMod && i > 1, inOrder) ===
           Seq(IsNotNull(k), iLeftMod, i > 1).map(_.canonicalized))
