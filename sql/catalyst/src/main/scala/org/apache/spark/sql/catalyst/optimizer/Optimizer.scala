@@ -2455,17 +2455,19 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
     // filter reads the column twice, so that `PhysicalOperation` and `ScanOperation` keep it
     // above a `Project` that computes the column with an expensive expression, e.g. a UDF, which
     // is then evaluated only once. The `isnotnull` always goes just before the first conjunct at
-    // which the conjuncts so far imply it, whatever the configuration, and only if the first
-    // conjunct that reads the column evaluates it on every row it is evaluated on (see
-    // `evaluatesOnEveryRow`), so that the column is computed on no other row than without it.
+    // which the conjuncts so far imply it, whatever the configuration, which is never before the
+    // first conjunct that reads the column, as a constraint of `child` is not added. The filter
+    // above the `Project` then computes the column for every row that reaches that conjunct,
+    // while a filter in-lined below it computes the column only where that conjunct evaluates
+    // it, so the `isnotnull` is added only if that conjunct evaluates the column on every row it
+    // is evaluated on (see `evaluatesOnEveryRow`).
     case filter @ Filter(condition, child) =>
       val canAdd: Expression => Boolean =
         if (filter.getTagValue(asOfInputFilterTag).isDefined) canBeAsOfFilter else canBeFilter
       lazy val failable = failableOutput(child)
-      val (newFilters, overFailable) = (filter.constraints --
-        (child.constraints ++ splitConjunctivePredicates(condition))).toSeq.filter(canAdd)
-        .partition(c => !c.references.exists(failable.contains))
-      lazy val conjuncts = splitConjunctivePredicates(condition)
+      val conjuncts = splitConjunctivePredicates(condition)
+      val (newFilters, overFailable) = (filter.constraints -- (child.constraints ++ conjuncts))
+        .toSeq.filter(canAdd).partition(c => !c.references.exists(failable.contains))
       val inOrder = overFailable.filter {
         case IsNotNull(e) => e.references.forall { a =>
           conjuncts.find(_.references.contains(a)).exists(evaluatesOnEveryRow(_, a))
@@ -2590,6 +2592,35 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
     if (ahead.isEmpty) placedCondition else And(ahead.reduce(And), placedCondition)
   }
 
+  /**
+   * Whether evaluating `e` evaluates `a` whenever it is evaluated. Only expressions whose order of
+   * evaluating their children is known count: unary ones that evaluate their child, comparisons
+   * and arithmetic that evaluate the left side and skip the right one when the left one is NULL,
+   * and division and modulo, which evaluate the right side and may skip the left one. Any other
+   * expression, e.g. `CaseWhen`, `Coalesce`, `And` or a UDF, does not count, even if it evaluates
+   * the column. For example, `u > 0`, `0 < u` and `k / u > 0` evaluate `u`, but
+   * `when(x > 5, x) + u > 0` does not on a row where `x` is at most 5, nor `u / k > 0` on a row
+   * where `k` is NULL.
+   */
+  private def evaluatesOnEveryRow(e: Expression, a: Attribute): Boolean = e match {
+    case r: Attribute => r.semanticEquals(a)
+    case u @ (_: Cast | _: UnaryMinus | _: UnaryPositive | _: Abs | _: Not | _: IsNull |
+        _: IsNotNull | _: GetStructField) =>
+      evaluatesOnEveryRow(u.children.head, a)
+    case b @ (_: BinaryComparison | _: Add | _: Subtract | _: Multiply | _: BitwiseAnd |
+        _: BitwiseOr | _: BitwiseXor) =>
+      val Seq(left, right) = b.children
+      if (left.references.contains(a)) {
+        evaluatesOnEveryRow(left, a)
+      } else {
+        !left.nullable && evaluatesOnEveryRow(right, a)
+      }
+    case b @ (_: DivModLike | _: Pmod) =>
+      val Seq(_, right) = b.children
+      evaluatesOnEveryRow(right, a)
+    case _ => false
+  }
+
   private def getAllConstraints(
       left: LogicalPlan,
       right: LogicalPlan,
@@ -2638,23 +2669,6 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
     val newPlan = inferNewFilter(plan, constraints, canAdd)
     if (newPlan ne plan) newPlan.setTagValue(asOfInputFilterTag, ())
     newPlan
-  }
-
-  /**
-   * Whether evaluating `e` evaluates `a` whenever it is evaluated: `e` reaches it through unary
-   * expressions, the left side of binary ones, and the right side of binary ones whose left side
-   * is never NULL, as a binary expression skips its right side when the left one is NULL. Other
-   * expressions, e.g. `CaseWhen`, `Coalesce`, `And` or a UDF, may skip their children, so they do
-   * not count. For example, `u > 0` and `0 < u` evaluate `u`, but `when(x > 5, x) + u > 0` does
-   * not on a row where `x` is at most 5.
-   */
-  private def evaluatesOnEveryRow(e: Expression, a: Attribute): Boolean = e match {
-    case r: Attribute => r.semanticEquals(a)
-    case _: And | _: Or => false
-    case u: UnaryExpression => evaluatesOnEveryRow(u.child, a)
-    case b: BinaryExpression if b.left.references.contains(a) => evaluatesOnEveryRow(b.left, a)
-    case b: BinaryExpression => !b.left.nullable && evaluatesOnEveryRow(b.right, a)
-    case _ => false
   }
 
   private def canBeFilter(constraint: Expression): Boolean =

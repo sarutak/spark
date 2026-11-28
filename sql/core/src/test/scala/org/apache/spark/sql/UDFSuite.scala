@@ -1387,13 +1387,19 @@ class UDFSuite extends SharedSparkSession {
               check(scan.select($"id", f($"id").as("u"), ($"id" + 1).as("v"))
                 .where($"id" > 2 && $"u" >= 5), 4, 7)
               // The filter does not evaluate `u` on the rows where `when(id > 5, id)` is NULL,
-              // so it is in-lined, and `g` is not called on id 3, on which it fails.
+              // so it is in-lined, and `g` is not called on id 3, on which it fails: 4 calls in
+              // the filter and 4 in the projection.
               val g = udf { (i: Long) =>
+                calls.add(1)
                 require(i != 3, "id = 3")
                 i - 1
               }
-              assert(scan.select($"id", g($"id").as("u")).where(when($"id" > 5, $"id") + $"u" > 0)
-                .collect().length == 4)
+              check(scan.select($"id", g($"id").as("u")).where(when($"id" > 5, $"id") + $"u" > 0),
+                4, 8)
+              // Nor does the division on the row where `k` is NULL, as it evaluates `k` first:
+              // 9 calls in the filter and 7 in the projection.
+              check(scan.select($"id", when($"id" =!= 3, $"id" + 1).as("k"), g($"id").as("u"))
+                .where($"u" / $"k" > 0), 7, 16)
             }
           }
         }

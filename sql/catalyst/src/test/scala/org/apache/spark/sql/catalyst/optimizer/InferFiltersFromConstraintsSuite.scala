@@ -525,7 +525,8 @@ class InferFiltersFromConstraintsSuite extends PlanTest {
       Some("l.x".attr === "r.y".attr))
   }
 
-  test("SPARK-61823: a constraint over a column that can fail is not inferred as a filter") {
+  test("SPARK-61823: no constraint but IsNotNull over a column that can fail is inferred as " +
+      "a filter") {
     // `i` can fail as the cast does, and `j` as it reads `i`, also through the sample, the
     // projection and the filter above them. So no constraint over either, e.g. `i > 0` from
     // `i = k AND k > 0`, goes ahead of the condition, while one over the non-deterministic `r`,
@@ -547,8 +548,8 @@ class InferFiltersFromConstraintsSuite extends PlanTest {
       Seq(IsNotNull(r), IsNotNull(i), i === k, k > 0, j, r > 0.5).map(_.canonicalized))
   }
 
-  test("SPARK-61921: a constraint over a column that can fail through a sort, a limit, an " +
-    "offset, a join or an aggregate is not inferred as a filter") {
+  test("SPARK-61921: no constraint but IsNotNull over a column that can fail through a sort, " +
+    "a limit, an offset, a join or an aggregate is inferred as a filter") {
     // `i` can fail as the cast does, also through the sort, the limits, the offset and the join,
     // and so can the aggregate result `c`. So no constraint over either, e.g. `i > 0` from
     // `i = k AND k > 0`, goes ahead of the condition, while one over `g`, a grouping key, `m`, an
@@ -573,7 +574,8 @@ class InferFiltersFromConstraintsSuite extends PlanTest {
   }
 
   test("SPARK-62394: an inferred IsNotNull check over a column that can fail goes just before " +
-      "the first conjunct at which the conjuncts so far imply it") {
+      "the first conjunct at which the conjuncts so far imply it, if the first conjunct on the " +
+      "column evaluates it on every row") {
     // `i` can fail as the cast does.
     val projected = LocalRelation($"s".string, $"k".int, $"m".int)
       .select($"k", $"m", Cast($"s", IntegerType, evalMode = EvalMode.ANSI).as("i"))
@@ -585,7 +587,7 @@ class InferFiltersFromConstraintsSuite extends PlanTest {
       }
     }
     // For either value of `evaluateNotNullChecksInOrder`. `isnotnull(k)` goes before the first
-    // conjunct either way.
+    // conjunct, or with the config, just before the first conjunct that implies it.
     for (inOrder <- Seq(false, true)) {
       withClue(s"inOrder=$inOrder: ") {
         // After the conjuncts before the first one on `i`, which drop rows first.
@@ -598,7 +600,7 @@ class InferFiltersFromConstraintsSuite extends PlanTest {
           Seq(IsNotNull(k), EqualNullSafe(i, k), k > 0, IsNotNull(i), i > 1)
         }).map(_.canonicalized))
         // None if the first conjunct on `i` may not evaluate it: the addition skips `i` when
-        // `when(k > 5, k)` is NULL, and `coalesce` counts as an expression that may skip it.
+        // `when(k > 5, k)` is NULL, and `coalesce` is not among the expressions that count.
         val nullableLeft = CaseWhen(Seq((k > 5, k))) + i > 0
         assert(conjuncts(nullableLeft && i > 1, inOrder) ===
           Seq(nullableLeft, i > 1).map(_.canonicalized))
@@ -614,6 +616,18 @@ class InferFiltersFromConstraintsSuite extends PlanTest {
         // A unary expression evaluates its child.
         assert(conjuncts(Abs(i) > 1, inOrder) ===
           Seq(IsNotNull(i), Abs(i) > 1).map(_.canonicalized))
+        // Modulo evaluates its right side first and skips the left one when the right one is
+        // NULL, so it evaluates `i` only on the right side.
+        val iLeftMod = Remainder(i, k) > 0
+        assert(conjuncts(iLeftMod && i > 1, inOrder) ===
+          Seq(IsNotNull(k), iLeftMod, i > 1).map(_.canonicalized))
+        val iRightMod = Pmod(k, i) > 0
+        assert(conjuncts(iRightMod && i > 1, inOrder) ===
+          Seq(IsNotNull(k), IsNotNull(i), iRightMod, i > 1).map(_.canonicalized))
+        // Nor does any other expression count, e.g. `array_repeat`, which skips `i` when `k` is
+        // NULL.
+        val repeat = ArrayRepeat(i, k) === ArrayRepeat(m, k)
+        assert(conjuncts(repeat && i > 1, inOrder) === Seq(repeat, i > 1).map(_.canonicalized))
         // No other constraint over `i`, e.g. `i > 0` from `i = k AND k > 0`. Before the same
         // conjunct, the checks over columns that cannot fail come first.
         assert(conjuncts(i === k && k > 0, inOrder) ===
