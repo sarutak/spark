@@ -574,8 +574,8 @@ class InferFiltersFromConstraintsSuite extends PlanTest {
   }
 
   test("SPARK-62394: an inferred IsNotNull check over a column that can fail goes just before " +
-      "the first conjunct at which the conjuncts so far imply it, if the first conjunct on the " +
-      "column evaluates it on every row") {
+    "the first conjunct at which the conjuncts so far imply it, if the first conjunct on the " +
+    "column evaluates it on every row") {
     // `i` can fail as the cast does.
     val projected = LocalRelation($"s".string, $"k".int, $"m".int)
       .select($"k", $"m", Cast($"s", IntegerType, evalMode = EvalMode.ANSI).as("i"))
@@ -627,6 +627,21 @@ class InferFiltersFromConstraintsSuite extends PlanTest {
             BitwiseAnd(i, k) > 1, BitwiseOr(i, k) > 1, BitwiseXor(i, k) > 1,
             IntegralDivide(Cast(k, LongType), Cast(i, LongType)) > 1L).foreach { c =>
           assert(conjuncts(c, inOrder).contains(IsNotNull(i).canonicalized), c)
+        }
+        // So do the null checks, which imply nothing themselves.
+        Seq(IsNull(i) === (k > 0), IsNotNull(i) === (k > 0)).foreach { c =>
+          assert(conjuncts(c && i > 1, inOrder).contains(IsNotNull(i).canonicalized), c)
+        }
+        // And a struct field: `isnotnull(st.x)` over a struct `st` that can fail.
+        val structs = projected.select(CreateNamedStruct(Seq(Literal("x"), i)).as("st"))
+        val st = structs.analyze.output.head
+        withSQLConf(SQLConf.EVALUATE_NOT_NULL_CHECKS_IN_ORDER.key -> inOrder.toString) {
+          val Filter(optimized, _) =
+            InferFiltersFromConstraints(structs.where(GetStructField(st, 0) > 1).analyze)
+          assert(splitConjunctivePredicates(optimized).exists {
+            case IsNotNull(e) => e.references.contains(st)
+            case _ => false
+          }, optimized)
         }
         // Modulo evaluates its right side first and skips the left one when the right one is
         // NULL, so only `i` on the right side counts.
