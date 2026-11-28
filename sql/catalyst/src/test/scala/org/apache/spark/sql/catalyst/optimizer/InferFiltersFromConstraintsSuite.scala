@@ -531,6 +531,7 @@ class InferFiltersFromConstraintsSuite extends PlanTest {
     // `i = k AND k > 0`, goes ahead of the condition, while one over the non-deterministic `r`,
     // which is computed on every row, does. Only `isnotnull(i)` is inferred over `i`, just
     // before `i = k`, which computes `i` anyway (SPARK-62394; the placement is tested below).
+    // `isnotnull(k)` is a constraint of the filter below already.
     val projected = LocalRelation($"s".string, $"k".int)
       .select($"k", Cast($"s", IntegerType, evalMode = EvalMode.ANSI).as("i"),
         (Rand(1) * $"k").as("r"))
@@ -590,11 +591,30 @@ class InferFiltersFromConstraintsSuite extends PlanTest {
         // After the conjuncts before the first one on `i`, which drop rows first.
         assert(conjuncts(k > 0 && k + 1 > 0 && i === k, inOrder) ===
           Seq(IsNotNull(k), k > 0, k + 1 > 0, IsNotNull(i), i === k).map(_.canonicalized))
-        // `coalesce(i, 0) > k` reads `i` first, but only `i > 1` implies `isnotnull(i)`.
+        // `i <=> k` reads `i` first, on every row, but only `i > 1` implies `isnotnull(i)`.
+        assert(conjuncts(EqualNullSafe(i, k) && k > 0 && i > 1, inOrder) === (if (inOrder) {
+          Seq(EqualNullSafe(i, k), IsNotNull(k), k > 0, IsNotNull(i), i > 1)
+        } else {
+          Seq(IsNotNull(k), EqualNullSafe(i, k), k > 0, IsNotNull(i), i > 1)
+        }).map(_.canonicalized))
+        // None if the first conjunct on `i` may not evaluate it: the addition skips `i` when
+        // `when(k > 5, k)` is NULL, and `coalesce` counts as an expression that may skip it.
+        val nullableLeft = CaseWhen(Seq((k > 5, k))) + i > 0
+        assert(conjuncts(nullableLeft && i > 1, inOrder) ===
+          Seq(nullableLeft, i > 1).map(_.canonicalized))
         assert(conjuncts(Coalesce(Seq(i, 0)) > k && k > 0 && i > 1, inOrder) ===
-          Seq(IsNotNull(k), Coalesce(Seq(i, 0)) > k, k > 0, IsNotNull(i), i > 1)
-            .map(_.canonicalized))
-        // No other constraint over `i`, e.g. `i > 0` from `i = k AND k > 0`.
+          Seq(IsNotNull(k), Coalesce(Seq(i, 0)) > k, k > 0, i > 1).map(_.canonicalized))
+        // With `i` on the left side, the addition evaluates it.
+        val iFirst = i + CaseWhen(Seq((k > 5, k))) > 0
+        assert(conjuncts(iFirst && i > 1, inOrder) ===
+          Seq(IsNotNull(i), iFirst, i > 1).map(_.canonicalized))
+        // `OR` skips its right side when the left one is TRUE, even if it is never NULL.
+        val or = IsNotNull(k) || i > 0
+        assert(conjuncts(or && i > 1, inOrder) === Seq(or, i > 1).map(_.canonicalized))
+        // A unary expression evaluates its child.
+        assert(conjuncts(Abs(i) > 1, inOrder) === Seq(IsNotNull(i), Abs(i) > 1).map(_.canonicalized))
+        // No other constraint over `i`, e.g. `i > 0` from `i = k AND k > 0`. Before the same
+        // conjunct, the checks over columns that cannot fail come first.
         assert(conjuncts(i === k && k > 0, inOrder) ===
           Seq(IsNotNull(k), IsNotNull(i), i === k, k > 0).map(_.canonicalized))
         // Nor one over `i` and a column that cannot fail, e.g. `i = m` from `i = k AND k = m`.

@@ -1382,10 +1382,18 @@ class UDFSuite extends SharedSparkSession {
               }
               // The filter stays above the projection, which evaluates `u` once per row.
               check(scan.select($"id", f($"id").as("u")).where($"u" >= 0), 9, 10)
-              // With another column, which cannot fail. `id > 2` is pushed below the projection,
-              // which evaluates `u` for its 7 rows.
+              // With another column, which the filter does not read. `id > 2` is pushed below the
+              // projection, which evaluates `u` for its 7 rows.
               check(scan.select($"id", f($"id").as("u"), ($"id" + 1).as("v"))
                 .where($"id" > 2 && $"u" >= 5), 4, 7)
+              // The filter does not evaluate `u` on the rows where `when(id > 5, id)` is NULL,
+              // so it is in-lined, and `g` is not called on id 3, on which it fails.
+              val g = udf { (i: Long) =>
+                require(i != 3, "id = 3")
+                i - 1
+              }
+              assert(scan.select($"id", g($"id").as("u")).where(when($"id" > 5, $"id") + $"u" > 0)
+                .collect().length == 4)
             }
           }
         }

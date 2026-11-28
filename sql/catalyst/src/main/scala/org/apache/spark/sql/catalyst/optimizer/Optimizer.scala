@@ -2450,11 +2450,13 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
     // `spark.sql.optimizer.evaluateNotNullChecksInOrder`, each just before the first conjunct at
     // which the conjuncts so far imply it, see `withInferredPredicates`. Ahead of the condition,
     // one over a column that can fail (see `failableOutput`) would compute that column on rows
-    // that the conjuncts after it drop. So such a column gets only `isnotnull`, and always just
-    // before that conjunct, which a conjunct reading the column is or precedes, so that it does
-    // not compute the column any earlier. With it, the filter reads the column twice, so that
-    // `PhysicalOperation` and `ScanOperation` keep it above a `Project` that computes the column
-    // with an expensive expression, e.g. a UDF, which is then evaluated only once (SPARK-62394).
+    // that the conjuncts after it drop, so such a column gets none, except `isnotnull`
+    // (SPARK-62394). With it, the filter reads the column twice, so that `PhysicalOperation` and
+    // `ScanOperation` keep it above a `Project` that computes the column with an expensive
+    // expression, e.g. a UDF, which is then evaluated only once. It always goes just before the
+    // first conjunct at which the conjuncts so far imply it, and only if the first conjunct that
+    // reads the column evaluates it on every row it is evaluated on (see `evaluatesOnEveryRow`),
+    // so that the column is computed on no other row than without it.
     case filter @ Filter(condition, child) =>
       val canAdd: Expression => Boolean =
         if (filter.getTagValue(asOfInputFilterTag).isDefined) canBeAsOfFilter else canBeFilter
@@ -2462,7 +2464,13 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
       val (newFilters, overFailable) = (filter.constraints --
         (child.constraints ++ splitConjunctivePredicates(condition))).toSeq.filter(canAdd)
         .partition(c => !c.references.exists(failable.contains))
-      val inOrder = overFailable.filter(_.isInstanceOf[IsNotNull])
+      lazy val conjuncts = splitConjunctivePredicates(condition)
+      val inOrder = overFailable.filter {
+        case IsNotNull(e) => e.references.forall { a =>
+          conjuncts.find(_.references.contains(a)).exists(evaluatesOnEveryRow(_, a))
+        }
+        case _ => false
+      }
       if (newFilters.nonEmpty || inOrder.nonEmpty) {
         Filter(withInferredPredicates(newFilters, inOrder, condition, child), child)
       } else {
@@ -2629,6 +2637,23 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
     val newPlan = inferNewFilter(plan, constraints, canAdd)
     if (newPlan ne plan) newPlan.setTagValue(asOfInputFilterTag, ())
     newPlan
+  }
+
+  /**
+   * Whether evaluating `e` evaluates `a` whenever it is evaluated: `e` reaches it through unary
+   * expressions, the left side of binary ones, and the right side of binary ones whose left side
+   * is never NULL, as a binary expression skips its right side when the left one is NULL. Other
+   * expressions, e.g. `CaseWhen`, `Coalesce`, `And` or a UDF, may skip their children, so they do
+   * not count. For example, `u > 0` and `0 < u` evaluate `u`, but `when(x > 5, x) + u > 0` does
+   * not on a row where `x` is at most 5.
+   */
+  private def evaluatesOnEveryRow(e: Expression, a: Attribute): Boolean = e match {
+    case r: Attribute => r.semanticEquals(a)
+    case _: And | _: Or => false
+    case u: UnaryExpression => evaluatesOnEveryRow(u.child, a)
+    case b: BinaryExpression if b.left.references.contains(a) => evaluatesOnEveryRow(b.left, a)
+    case b: BinaryExpression => !b.left.nullable && evaluatesOnEveryRow(b.right, a)
+    case _ => false
   }
 
   private def canBeFilter(constraint: Expression): Boolean =
