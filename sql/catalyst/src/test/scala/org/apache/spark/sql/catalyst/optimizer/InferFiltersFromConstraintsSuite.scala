@@ -639,7 +639,7 @@ class InferFiltersFromConstraintsSuite extends PlanTest {
           val Filter(optimized, _) =
             InferFiltersFromConstraints(structs.where(GetStructField(st, 0) > 1).analyze)
           assert(splitConjunctivePredicates(optimized).exists {
-            case IsNotNull(e) => e.references.contains(st)
+            case IsNotNull(GetStructField(a: Attribute, 0, _)) => a.semanticEquals(st)
             case _ => false
           }, optimized)
         }
