@@ -612,7 +612,8 @@ class InferFiltersFromConstraintsSuite extends PlanTest {
         val or = IsNotNull(k) || i > 0
         assert(conjuncts(or && i > 1, inOrder) === Seq(or, i > 1).map(_.canonicalized))
         // A unary expression evaluates its child.
-        assert(conjuncts(Abs(i) > 1, inOrder) === Seq(IsNotNull(i), Abs(i) > 1).map(_.canonicalized))
+        assert(conjuncts(Abs(i) > 1, inOrder) ===
+          Seq(IsNotNull(i), Abs(i) > 1).map(_.canonicalized))
         // No other constraint over `i`, e.g. `i > 0` from `i = k AND k > 0`. Before the same
         // conjunct, the checks over columns that cannot fail come first.
         assert(conjuncts(i === k && k > 0, inOrder) ===
