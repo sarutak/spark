@@ -2448,15 +2448,16 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
     _.containsAnyPattern(FILTER, JOIN, AS_OF_JOIN)) {
     // The new filters over columns that cannot fail go ahead of the condition, or, with
     // `spark.sql.optimizer.evaluateNotNullChecksInOrder`, each just before the first conjunct at
-    // which the conjuncts so far imply it, see `withInferredPredicates`. Ahead of the condition,
-    // one over a column that can fail (see `failableOutput`) would compute that column on rows
-    // that the conjuncts after it drop, so such a column gets none, except `isnotnull`
-    // (SPARK-62394). With it, the filter reads the column twice, so that `PhysicalOperation` and
-    // `ScanOperation` keep it above a `Project` that computes the column with an expensive
-    // expression, e.g. a UDF, which is then evaluated only once. It always goes just before the
-    // first conjunct at which the conjuncts so far imply it, and only if the first conjunct that
-    // reads the column evaluates it on every row it is evaluated on (see `evaluatesOnEveryRow`),
-    // so that the column is computed on no other row than without it.
+    // which the conjuncts so far imply it, see `withInferredPredicates`. Either way, one over a
+    // column that can fail (see `failableOutput`) may compute that column on rows that the
+    // condition does not compute it on, e.g. ones that the conjuncts after it drop, so such a
+    // column gets none (SPARK-61823), except `isnotnull` (SPARK-62394). With `isnotnull`, the
+    // filter reads the column twice, so that `PhysicalOperation` and `ScanOperation` keep it
+    // above a `Project` that computes the column with an expensive expression, e.g. a UDF, which
+    // is then evaluated only once. The `isnotnull` always goes just before the first conjunct at
+    // which the conjuncts so far imply it, whatever the configuration, and only if the first
+    // conjunct that reads the column evaluates it on every row it is evaluated on (see
+    // `evaluatesOnEveryRow`), so that the column is computed on no other row than without it.
     case filter @ Filter(condition, child) =>
       val canAdd: Expression => Boolean =
         if (filter.getTagValue(asOfInputFilterTag).isDefined) canBeAsOfFilter else canBeFilter
