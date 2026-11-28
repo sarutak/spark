@@ -529,8 +529,8 @@ class InferFiltersFromConstraintsSuite extends PlanTest {
     // `i` can fail as the cast does, and `j` as it reads `i`, also through the sample, the
     // projection and the filter above them. So no constraint over either, e.g. `i > 0` from
     // `i = k AND k > 0`, goes ahead of the condition, while one over the non-deterministic `r`,
-    // which is computed on every row, does. `isnotnull(i)` goes just before `i = k`, which
-    // computes `i` anyway (SPARK-62394).
+    // which is computed on every row, does. Only `isnotnull(i)` is inferred over `i`, just
+    // before `i = k`, which computes `i` anyway (SPARK-62394; the placement is tested below).
     val projected = LocalRelation($"s".string, $"k".int)
       .select($"k", Cast($"s", IntegerType, evalMode = EvalMode.ANSI).as("i"),
         (Rand(1) * $"k").as("r"))
@@ -552,7 +552,7 @@ class InferFiltersFromConstraintsSuite extends PlanTest {
     // and so can the aggregate result `c`. So no constraint over either, e.g. `i > 0` from
     // `i = k AND k > 0`, goes ahead of the condition, while one over `g`, a grouping key, `m`, an
     // aggregate function, or `f`, a non-deterministic result computed for every group, does.
-    // `isnotnull(i)` and `isnotnull(c)` go just before `i = k` and `c = m` (SPARK-62394).
+    // Only `isnotnull(i)` and `isnotnull(c)` are inferred over them (SPARK-62394).
     val left = LocalRelation($"s".string, $"k".int)
       .select($"k", Cast($"s", IntegerType, evalMode = EvalMode.ANSI).as("i"))
       .orderBy($"k".asc)
@@ -574,17 +574,17 @@ class InferFiltersFromConstraintsSuite extends PlanTest {
   test("SPARK-62394: an inferred IsNotNull check over a column that can fail goes just before " +
       "the first conjunct at which the conjuncts so far imply it") {
     // `i` can fail as the cast does.
-    val projected = LocalRelation($"s".string, $"k".int)
-      .select($"k", Cast($"s", IntegerType, evalMode = EvalMode.ANSI).as("i"))
-    val Seq(k, i) = projected.analyze.output
+    val projected = LocalRelation($"s".string, $"k".int, $"m".int)
+      .select($"k", $"m", Cast($"s", IntegerType, evalMode = EvalMode.ANSI).as("i"))
+    val Seq(k, m, i) = projected.analyze.output
     def conjuncts(condition: Expression, inOrder: Boolean): Seq[Expression] = {
       withSQLConf(SQLConf.EVALUATE_NOT_NULL_CHECKS_IN_ORDER.key -> inOrder.toString) {
         val Filter(optimized, _) = InferFiltersFromConstraints(projected.where(condition).analyze)
         splitConjunctivePredicates(optimized).map(_.canonicalized)
       }
     }
-    // Whatever `evaluateNotNullChecksInOrder` is. `isnotnull(k)` goes before the first conjunct
-    // either way.
+    // For either value of `evaluateNotNullChecksInOrder`. `isnotnull(k)` goes before the first
+    // conjunct either way.
     for (inOrder <- Seq(false, true)) {
       withClue(s"inOrder=$inOrder: ") {
         // After the conjuncts before the first one on `i`, which drop rows first.
@@ -597,6 +597,12 @@ class InferFiltersFromConstraintsSuite extends PlanTest {
         // No other constraint over `i`, e.g. `i > 0` from `i = k AND k > 0`.
         assert(conjuncts(i === k && k > 0, inOrder) ===
           Seq(IsNotNull(k), IsNotNull(i), i === k, k > 0).map(_.canonicalized))
+        // Nor one over `i` and a column that cannot fail, e.g. `i = m` from `i = k AND k = m`.
+        val transitive = conjuncts(k > 0 && i === k && k === m, inOrder)
+        assert(transitive.contains(IsNotNull(i).canonicalized))
+        assert(!transitive.contains((i === m).canonicalized), transitive)
+        // `isnotnull(i)` is the only predicate to infer.
+        assert(conjuncts(i > 1, inOrder) === Seq(IsNotNull(i), i > 1).map(_.canonicalized))
       }
     }
   }

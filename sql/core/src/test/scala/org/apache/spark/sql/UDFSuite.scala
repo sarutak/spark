@@ -1361,7 +1361,8 @@ class UDFSuite extends SharedSparkSession {
   test("SPARK-62394: A filter on the result of a Scala UDF over a scan evaluates it once") {
     withSQLConf(SQLConf.ADAPTIVE_EXECUTION_ENABLED.key -> "false") {
       val calls = spark.sparkContext.longAccumulator("calls")
-      // A nullable result, as `udf` wraps a primitive argument in a null check.
+      // `id` read from Parquet is nullable, so the result is nullable, as `udf` wraps a
+      // primitive argument in a null check.
       val f = udf { (i: Long) =>
         calls.add(1)
         i - 1
@@ -1381,7 +1382,8 @@ class UDFSuite extends SharedSparkSession {
               }
               // The filter stays above the projection, which evaluates `u` once per row.
               check(scan.select($"id", f($"id").as("u")).where($"u" >= 0), 9, 10)
-              // `id > 2` is pushed below the projection, which evaluates `u` for its 7 rows.
+              // With another column, which cannot fail. `id > 2` is pushed below the projection,
+              // which evaluates `u` for its 7 rows.
               check(scan.select($"id", f($"id").as("u"), ($"id" + 1).as("v"))
                 .where($"id" > 2 && $"u" >= 5), 4, 7)
             }

@@ -2446,15 +2446,15 @@ object InferFiltersFromConstraints extends Rule[LogicalPlan]
   private def inferFilters(
       plan: LogicalPlan, acrossAsOfJoins: Boolean): LogicalPlan = plan.transformWithPruning(
     _.containsAnyPattern(FILTER, JOIN, AS_OF_JOIN)) {
-    // The new filters go ahead of the condition, or, with
+    // The new filters over columns that cannot fail go ahead of the condition, or, with
     // `spark.sql.optimizer.evaluateNotNullChecksInOrder`, each just before the first conjunct at
     // which the conjuncts so far imply it, see `withInferredPredicates`. Ahead of the condition,
     // one over a column that can fail (see `failableOutput`) would compute that column on rows
     // that the conjuncts after it drop. So such a column gets only `isnotnull`, and always just
     // before that conjunct, which a conjunct reading the column is or precedes, so that it does
     // not compute the column any earlier. With it, the filter reads the column twice, so that
-    // it stays above a `Project` that computes the column, which then evaluates an expensive
-    // expression of the column, e.g. a UDF, only once (SPARK-62394).
+    // `PhysicalOperation` and `ScanOperation` keep it above a `Project` that computes the column
+    // with an expensive expression, e.g. a UDF, which is then evaluated only once (SPARK-62394).
     case filter @ Filter(condition, child) =>
       val canAdd: Expression => Boolean =
         if (filter.getTagValue(asOfInputFilterTag).isDefined) canBeAsOfFilter else canBeFilter
